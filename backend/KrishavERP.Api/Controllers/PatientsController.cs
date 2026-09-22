@@ -43,6 +43,7 @@ public class PatientsController : ControllerBase
                 x.PatientCode,
                 x.Name,
                 x.Age,
+                x.AgeUnit,
                 x.Gender,
                 x.Phone,
                 x.CreatedAtUtc
@@ -117,6 +118,7 @@ public class PatientsController : ControllerBase
                 patient.PatientCode,
                 patient.Name,
                 patient.Age,
+                patient.AgeUnit,
                 patient.Gender,
                 patient.Phone,
                 patient.CreatedAtUtc,
@@ -179,6 +181,7 @@ public class PatientsController : ControllerBase
                 x.PatientCode,
                 x.Name,
                 x.Age,
+                x.AgeUnit,
                 x.Gender,
                 x.Phone
             })
@@ -200,6 +203,7 @@ public class PatientsController : ControllerBase
         {
             Name = request.Name.Trim(),
             Age = request.Age!.Value,
+            AgeUnit = string.IsNullOrWhiteSpace(request.AgeUnit) ? "Years" : request.AgeUnit,
             Gender = request.Gender,
             Phone = request.Phone.Trim(),
             MarketingSource = string.IsNullOrWhiteSpace(request.MarketingSource) ? "Walk-in" : request.MarketingSource,
@@ -391,6 +395,7 @@ public class PatientsController : ControllerBase
 
         patient.Name = request.Name.Trim();
         patient.Age = request.Age!.Value;
+        patient.AgeUnit = string.IsNullOrWhiteSpace(request.AgeUnit) ? "Years" : request.AgeUnit;
         patient.Gender = request.Gender;
         patient.Phone = request.Phone.Trim();
         patient.MarketingSource = string.IsNullOrWhiteSpace(request.MarketingSource) ? "Walk-in" : request.MarketingSource;
@@ -515,6 +520,10 @@ public class PatientsController : ControllerBase
 
         if (!request.Age.HasValue || request.Age < 0)
             errors.Add("Valid age is required.");
+
+        if (!string.IsNullOrWhiteSpace(request.AgeUnit) &&
+            !new[] { "Days", "Weeks", "Months", "Years" }.Contains(request.AgeUnit))
+            errors.Add("Age unit must be Days, Weeks, Months or Years.");
 
         if (string.IsNullOrWhiteSpace(request.Gender))
             errors.Add("Gender is required.");

@@ -13,6 +13,11 @@ public class PatientCreateRequest
         get;
         set;
     }
+    public string? AgeUnit
+    {
+        get;
+        set;
+    }
     public string Gender
     {
         get;

@@ -5,6 +5,7 @@ import { can } from '../auth';
 import Pagination from '../components/Pagination.vue';
 import GridSearch from '../components/GridSearch.vue';
 import { useGrid } from '../composables/useGrid';
+import { ageText } from '../utils/age';
 
 const rows = ref([]);
 const pageSize = 10;
@@ -34,6 +35,7 @@ const patientFollowUps = ref([]);
 const blank = {
   name: '',
   age: null,
+  ageUnit: 'Years',
   gender: '',
   phone: '',
   address: '',
@@ -170,6 +172,7 @@ function edit(patient) {
     id: patient.id,
     name: patient.name,
     age: patient.age,
+    ageUnit: patient.ageUnit || 'Years',
     gender: patient.gender,
     phone: patient.phone,
     address: patient.address || '',
@@ -404,7 +407,7 @@ onMounted(load);
     <tr v-for="patient in pagedRows" :key="patient.id">
       <td>{{ patient.patientCode }}</td>
       <td>{{ patient.name }}</td>
-      <td>{{ patient.age }} / {{ patient.gender }}</td>
+      <td>{{ ageText(patient) }} / {{ patient.gender }}</td>
       <td>{{ patient.phone }}</td>
       <td>{{ patient.registrationType }}</td>
       <td>{{ patient.doctorName || '-' }}</td>
@@ -437,6 +440,15 @@ onMounted(load);
       <div class="form-grid">
         <label>Name *<input v-model="form.name"></label>
         <label>Age *<input v-model.number="form.age" type="number" min="0"></label>
+        <label>
+          Age Unit
+          <select v-model="form.ageUnit">
+            <option>Years</option>
+            <option>Months</option>
+            <option>Weeks</option>
+            <option>Days</option>
+          </select>
+        </label>
         <label>
           Gender *
           <select v-model="form.gender">
@@ -549,7 +561,7 @@ onMounted(load);
 
       <div v-for="patient in duplicate.patients" :key="patient.id" class="card">
         <b>{{ patient.name }}</b> · {{ patient.patientCode }}
-        <div class="muted">{{ patient.age }} / {{ patient.gender }} · {{ patient.phone }}</div>
+        <div class="muted">{{ ageText(patient) }} / {{ patient.gender }} · {{ patient.phone }}</div>
         <button @click="existingOpd(patient)">Book New OPD for Existing Patient</button>
       </div>
 
@@ -608,7 +620,7 @@ onMounted(load);
           <div class="muted" v-if="opdBillPatient">
             {{ opdBillPatient.patientCode }} ·
             {{ opdBillPatient.name }} ·
-            {{ opdBillPatient.age }}/{{ opdBillPatient.gender }} ·
+            {{ ageText(opdBillPatient) }}/{{ opdBillPatient.gender }} ·
             {{ opdBillPatient.phone }}
           </div>
         </div>

@@ -260,6 +260,12 @@ public class StaffController : ControllerBase
         var end = start.AddMonths(1);
         var daysInMonth = DateTime.DaysInMonth(year, month);
 
+        var prevMonthStart = start.AddMonths(-1);
+        var prevYear = prevMonthStart.Year;
+        var prevMonth = prevMonthStart.Month;
+        var prevDaysInMonth = DateTime.DaysInMonth(prevYear, prevMonth);
+        var prevEnd = start;
+
         var staff = await _db.StaffMembers
             .Where(x => x.IsActive)
             .OrderBy(x => x.Name)
@@ -273,15 +279,26 @@ public class StaffController : ControllerBase
             .Where(x => x.SalaryYear == year && x.SalaryMonth == month)
             .ToListAsync();
 
+        var prevAttendance = await _db.StaffAttendances
+            .Where(x => x.AttendanceDate >= prevMonthStart && x.AttendanceDate < prevEnd)
+            .ToListAsync();
+
+        var prevPayments = await _db.SalaryPayments
+            .Where(x => x.SalaryYear == prevYear && x.SalaryMonth == prevMonth)
+            .ToListAsync();
+
         var result = staff.Select(x =>
         {
             var items = attendance.Where(a => a.StaffId == x.Id).ToList();
-            var absentDays = items.Count(a => a.Status == "Absent");
-            var halfDays = items.Count(a => a.Status == "Half Day");
-            var dailyRate = daysInMonth == 0 ? 0 : x.MonthlySalary / daysInMonth;
-            var deduction = Math.Round(dailyRate * absentDays + dailyRate * 0.5m * halfDays, 2);
-            var payable = Math.Max(0, x.MonthlySalary - deduction);
+            var calc = CalculateSalary(items, x.MonthlySalary, daysInMonth);
             var payment = payments.FirstOrDefault(p => p.StaffId == x.Id);
+
+            var prevItems = prevAttendance.Where(a => a.StaffId == x.Id).ToList();
+            var prevCalc = CalculateSalary(prevItems, x.MonthlySalary, prevDaysInMonth);
+            var prevPayment = prevPayments.FirstOrDefault(p => p.StaffId == x.Id);
+            var previousOutstanding = x.DateOfJoining.HasValue && x.DateOfJoining.Value >= prevEnd
+                ? 0
+                : Math.Max(0, prevCalc.PayableAmount - (prevPayment?.PaidAmount ?? 0));
 
             return new
             {
@@ -289,18 +306,21 @@ public class StaffController : ControllerBase
                 x.StaffCode,
                 x.Name,
                 x.Designation,
+                x.AccountNumber,
                 x.MonthlySalary,
                 DaysInMonth = daysInMonth,
-                PresentDays = items.Count(a => a.Status == "Present"),
-                AbsentDays = absentDays,
-                HalfDays = halfDays,
-                WeekOffDays = items.Count(a => a.Status == "WeekOff"),
-                LeaveDays = items.Count(a => a.Status == "Leave"),
-                DailyRate = Math.Round(dailyRate, 2),
-                DeductionAmount = deduction,
-                PayableAmount = Math.Round(payable, 2),
+                PresentDays = calc.PresentDays,
+                AbsentDays = calc.AbsentDays,
+                HalfDays = calc.HalfDays,
+                WeekOffDays = calc.WeekOffDays,
+                LeaveDays = calc.LeaveDays,
+                UnmarkedDays = calc.UnmarkedDays,
+                DailyRate = calc.DailyRate,
+                DeductionAmount = calc.DeductionAmount,
+                PayableAmount = calc.PayableAmount,
                 PaidAmount = payment?.PaidAmount ?? 0,
-                Outstanding = Math.Max(0, payable - (payment?.PaidAmount ?? 0)),
+                Outstanding = Math.Max(0, calc.PayableAmount - (payment?.PaidAmount ?? 0)),
+                PreviousOutstanding = previousOutstanding,
                 payment?.PaymentDate,
                 payment?.PaymentMode,
                 payment?.ReferenceNumber,
@@ -339,13 +359,9 @@ public class StaffController : ControllerBase
             .Where(x => x.StaffId == staff.Id && x.AttendanceDate >= start && x.AttendanceDate < end)
             .ToListAsync();
 
-        var absentDays = items.Count(x => x.Status == "Absent");
-        var halfDays = items.Count(x => x.Status == "Half Day");
-        var dailyRate = staff.MonthlySalary / daysInMonth;
-        var deduction = Math.Round(dailyRate * absentDays + dailyRate * 0.5m * halfDays, 2);
-        var payable = Math.Round(Math.Max(0, staff.MonthlySalary - deduction), 2);
+        var calc = CalculateSalary(items, staff.MonthlySalary, daysInMonth);
 
-        if (request.PaidAmount < 0 || request.PaidAmount > payable)
+        if (request.PaidAmount < 0 || request.PaidAmount > calc.PayableAmount)
         {
             return BadRequest(new { message = "Paid amount cannot be more than payable salary." });
         }
@@ -367,10 +383,10 @@ public class StaffController : ControllerBase
         }
 
         row.GrossSalary = staff.MonthlySalary;
-        row.AbsentDays = absentDays;
-        row.HalfDays = halfDays;
-        row.DeductionAmount = deduction;
-        row.PayableAmount = payable;
+        row.AbsentDays = calc.AbsentDays + calc.UnmarkedDays;
+        row.HalfDays = calc.HalfDays;
+        row.DeductionAmount = calc.DeductionAmount;
+        row.PayableAmount = calc.PayableAmount;
         row.PaidAmount = request.PaidAmount;
         row.PaymentDate = request.PaymentDate;
         row.PaymentMode = request.PaymentMode?.Trim();
@@ -381,6 +397,27 @@ public class StaffController : ControllerBase
 
         await _db.SaveChangesAsync();
         return Ok(row);
+    }
+
+    private const decimal SalaryDaysPerMonth = 30m;
+
+    private static (int PresentDays, int AbsentDays, int HalfDays, int WeekOffDays, int LeaveDays, int UnmarkedDays, decimal DailyRate, decimal DeductionAmount, decimal PayableAmount) CalculateSalary(
+        List<StaffAttendance> items, decimal monthlySalary, int daysInMonth)
+    {
+        var presentDays = items.Count(a => a.Status == "Present");
+        var absentDays = items.Count(a => a.Status == "Absent");
+        var halfDays = items.Count(a => a.Status == "Half Day");
+        var weekOffDays = items.Count(a => a.Status == "WeekOff");
+        var leaveDays = items.Count(a => a.Status == "Leave");
+        var markedDays = presentDays + absentDays + halfDays + weekOffDays + leaveDays;
+        var unmarkedDays = Math.Max(0, daysInMonth - markedDays);
+
+        var dailyRate = monthlySalary / SalaryDaysPerMonth;
+        var rawDeduction = dailyRate * (absentDays + unmarkedDays) + dailyRate * 0.5m * halfDays;
+        var deduction = Math.Round(Math.Min(rawDeduction, monthlySalary), 0, MidpointRounding.AwayFromZero);
+        var payable = Math.Max(0, Math.Round(monthlySalary - deduction, 0, MidpointRounding.AwayFromZero));
+
+        return (presentDays, absentDays, halfDays, weekOffDays, leaveDays, unmarkedDays, Math.Round(dailyRate, 0, MidpointRounding.AwayFromZero), deduction, payable);
     }
 
     private async Task<string?> ValidateStaff(StaffRequest request)

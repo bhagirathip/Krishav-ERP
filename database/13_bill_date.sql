@@ -1,11 +1,4 @@
-USE KrishavERPv52;
-GO
-
-IF COL_LENGTH('dbo.Bills','BillDate') IS NULL
-BEGIN
-    ALTER TABLE dbo.Bills ADD BillDate DATETIME2 NULL;
-    EXEC('UPDATE dbo.Bills SET BillDate = CreatedAtUtc WHERE BillDate IS NULL');
-    ALTER TABLE dbo.Bills ALTER COLUMN BillDate DATETIME2 NOT NULL;
-    ALTER TABLE dbo.Bills ADD CONSTRAINT DF_Bills_BillDate DEFAULT SYSUTCDATETIME() FOR BillDate;
-END
-GO
+SELECT
+    @@SERVERNAME AS ServerName,
+    SERVERPROPERTY('InstanceName') AS InstanceName,
+    DB_NAME() AS DatabaseName;

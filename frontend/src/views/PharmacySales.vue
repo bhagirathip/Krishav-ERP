@@ -5,6 +5,7 @@ import { can } from '../auth';
 import Pagination from '../components/Pagination.vue';
 import GridSearch from '../components/GridSearch.vue';
 import { useGrid } from '../composables/useGrid';
+import { ageText } from '../utils/age';
 
 const activeTab = ref('bill');
 const inventoryRows = ref([]);
@@ -305,7 +306,7 @@ onMounted(async () => {
 
     <div v-if="patientId && selectedPatient" class="card patient-summary-card">
       <b>{{ selectedPatient.name }}</b> · {{ selectedPatient.patientCode }}<br>
-      Age/Gender: {{ selectedPatient.age }}/{{ selectedPatient.gender }} · Phone: {{ selectedPatient.phone }} · Doctor: {{ selectedPatient.doctorName || '-' }}
+      Age/Gender: {{ ageText(selectedPatient) }}/{{ selectedPatient.gender }} · Phone: {{ selectedPatient.phone }} · Doctor: {{ selectedPatient.doctorName || '-' }}
     </div>
 
     <div v-else class="form-grid">

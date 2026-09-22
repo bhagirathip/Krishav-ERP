@@ -5,6 +5,7 @@ import { can } from '../auth';
 import Pagination from '../components/Pagination.vue';
 import GridSearch from '../components/GridSearch.vue';
 import { useGrid } from '../composables/useGrid';
+import { ageText } from '../utils/age';
 
 const tests=ref([]),orders=ref([]),patients=ref([]),discounts=ref([]),showOrder=ref(false),showTests=ref(false),showResult=ref(false),selectedOrder=ref(null),orderTests=ref([]),resultData=ref(null);
 const pageSize=10;
@@ -67,62 +68,85 @@ function findValueColumnId(columns){
   return col?col.id:null;
 }
 
-// One test's title + result table, no patient info/header/footer - reused by
-// both the single-test print and the merged all-tests print.
-function buildTestBlockHtml(data){
-  const schema=data.resultSchema||{};
-  const columns=Array.isArray(schema.columns)?schema.columns:[];
-  const valueColumnId=findValueColumnId(columns);
-  // Skip parameters that have no result entered yet.
-  const rows=(Array.isArray(schema.rows)?schema.rows:[])
-    .filter(row=>valueColumnId
-      ? String(row.values?.[valueColumnId]??'').trim()!==''
-      : columns.some(c=>String(row.values?.[c.id]??'').trim()!==''));
+// One shared result table for one or more tests: the column header row (No.,
+// Investigation, Unit, Range, ...) is printed once, then each test contributes
+// a name row followed by its own parameter rows - instead of a separate table
+// with its own header per test.
+function buildMergedTestsHtml(results){
+  const canonicalCols=[];
+  const seen=new Set();
+  results.forEach(data=>{
+    const columns=Array.isArray(data.resultSchema?.columns)?data.resultSchema.columns:[];
+    columns.forEach(c=>{
+      const name=c.name||'';
+      if(!seen.has(name)){seen.add(name);canonicalCols.push(name)}
+    });
+  });
 
-  const headerHtml=`<th class="no-col">No.</th>${columns.map(c=>`<th>${escapeHtml(c.name||'')}</th>`).join('')}`;
-  const rowHtml=rows
-    .map((row,index)=>`<tr><td class="no-col">${index+1}</td>${columns.map(c=>`<td>${escapeHtml(row.values?.[c.id]??'')}</td>`).join('')}</tr>`)
-    .join('');
+  const headerHtml=`<th class="no-col">No.</th>${canonicalCols.map(name=>`<th>${escapeHtml(name)}</th>`).join('')}`;
 
-  return `<div class="test-block">
-    <div class="test-title">${escapeHtml(data.test?.name||'')}</div>
-    <table class="result-table">
-      <thead><tr>${headerHtml}</tr></thead>
-      <tbody>${rowHtml || `<tr><td class="no-col"></td><td colspan="${Math.max(1,columns.length)}" class="muted-cell">No results entered yet.</td></tr>`}</tbody>
-    </table>
-    ${data.test?.note?`<div class="note"><b>Note:</b> ${escapeHtml(data.test.note)}</div>`:''}
-  </div>`;
+  const bodyHtml=results.map(data=>{
+    const schema=data.resultSchema||{};
+    const columns=Array.isArray(schema.columns)?schema.columns:[];
+    const nameToId={};
+    columns.forEach(c=>{nameToId[c.name||'']=c.id});
+    const valueColumnId=findValueColumnId(columns);
+    // Skip parameters that have no result entered yet.
+    const rows=(Array.isArray(schema.rows)?schema.rows:[])
+      .filter(row=>valueColumnId
+        ? String(row.values?.[valueColumnId]??'').trim()!==''
+        : columns.some(c=>String(row.values?.[c.id]??'').trim()!==''));
+
+    const nameRowHtml=`<tr class="test-name-row"><td class="no-col"></td><td colspan="${Math.max(1,canonicalCols.length)}">${escapeHtml(data.test?.name||'')}</td></tr>`;
+    const rowsHtml=rows.length
+      ? rows.map((row,index)=>`<tr><td class="no-col">${index+1}</td>${canonicalCols.map(name=>`<td>${escapeHtml(row.values?.[nameToId[name]]??'')}</td>`).join('')}</tr>`).join('')
+      : `<tr><td class="no-col"></td><td colspan="${Math.max(1,canonicalCols.length)}" class="muted-cell">No results entered yet.</td></tr>`;
+    const noteHtml=data.test?.note
+      ? `<tr class="note-row"><td class="no-col"></td><td colspan="${Math.max(1,canonicalCols.length)}" class="note-cell">Note: ${escapeHtml(data.test.note)}</td></tr>`
+      : '';
+
+    return nameRowHtml+rowsHtml+noteHtml;
+  }).join('');
+
+  return `<table class="result-table">
+    <thead><tr>${headerHtml}</tr></thead>
+    <tbody>${bodyHtml}</tbody>
+  </table>`;
 }
 
 // Wraps one or more test blocks with the shared header image, patient info
 // (styled as plain label rows, not a bordered box, per the reference report)
-// and a signatory footer. Uses a flex column stretched to a full A4 page so
-// the footer sits pinned to the bottom of the page - a <table>/thead/tfoot
-// was tried for a footer that repeats on every page, but it did not pin to
-// the page bottom in practice (showed up right after the content instead),
-// so this reverts to the simpler, reliably-bottom-pinned layout. The
-// trade-off: on a report long enough to spill onto a second page, the
-// footer only appears once at the very end, not repeated per page.
+// and a signatory footer. The header/footer used to be `position:fixed`
+// elements offset by the negative of the @page margin, which is a commonly
+// suggested trick for repeating print stationery - but verified against
+// Chromium's actual print/PDF engine (not just an on-screen preview), that
+// trick renders NOTHING: fixed-position elements are not drawn into the
+// page margin box at all, so the header/footer silently vanished from every
+// real print/PDF. The one pattern that verifiably repeats a header AND a
+// footer on every printed page in Chromium is an outer <table> with
+// <thead>/<tfoot> set to display:table-header-group/table-footer-group -
+// the whole document is that one table, with all page content in its
+// <tbody>.
 function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
-  // The uploaded reference uses the configured lab letterhead on every page,
-  // one patient-information panel at the beginning of the report, continuous
-  // test sections, and a compact fixed footer on every printed page.
   return `<!doctype html>
   <html>
     <head>
       <title></title>
       <style>
-        @page{size:A4;margin:45mm 10mm 34mm 10mm}
+        @page{size:A4;margin:10mm}
         *{box-sizing:border-box}
         html,body{margin:0;padding:0;font-family:"Times New Roman",serif;color:#111}
-        body{font-size:11.5px}
+        body{font-size:11.5px;counter-reset:page 1}
 
-        /* Repeated laboratory stationery */
-        .lab-page-header{position:fixed;top:-45mm;left:-10mm;right:-10mm;height:42mm;background:#fff}
-        .lab-page-header img{display:block;width:210mm;height:42mm;object-fit:fill}
+        table.page-frame{width:100%;border-collapse:collapse}
+        .page-frame thead{display:table-header-group}
+        .page-frame tfoot{display:table-footer-group}
+        .page-frame>thead>tr>td,.page-frame>tfoot>tr>td{padding:0}
 
-        /* Reference-style footer: repeated on every printed page. */
-        .lab-page-footer{position:fixed;bottom:-34mm;left:0;right:0;height:30mm;border-top:1px solid #222;background:#fff;padding:3mm 1mm 0;display:grid;grid-template-columns:1.35fr .9fr .55fr;column-gap:8mm;align-items:start;font-size:9px;line-height:1.35}
+        /* Repeated laboratory stationery. */
+        .lab-page-header img{display:block;width:100%;height:42mm;object-fit:fill}
+
+        .lab-page-footer{border-top:1px solid #222;padding:3mm 1mm 2mm;display:grid;grid-template-columns:1.35fr .9fr .55fr;column-gap:8mm;align-items:start;font-size:9px;line-height:1.35}
         .footer-meta div{margin:0 0 1px}
         .footer-meta b{font-weight:400}
         .signature-block{text-align:center;align-self:start}
@@ -134,61 +158,60 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
         .page-box .page-number:after{content:counter(page)}
 
         /* Printed once, directly below the configured lab header. */
-        .patient-info{border-top:1.5px solid #222;border-bottom:1.5px solid #222;margin:0 0 4mm;padding:2mm 1mm}
+        .patient-info{border-top:1.5px solid #222;border-bottom:1.5px solid #222;margin:4mm 0;padding:2mm 1mm}
         .pi-row{display:grid;grid-template-columns:1fr 1fr;gap:0 12mm;padding:1.1mm 0;font-size:10.5px}
         .pi-row b{display:inline-block;min-width:27mm;font-weight:700}
 
-        /* A complete short test is kept together. If it cannot fit in the
-           remaining space, the browser moves it to the next page. Tests that
-           are taller than a printable page are allowed to continue naturally. */
-        .test-block{break-inside:avoid;page-break-inside:avoid;margin:0 0 5mm}
-        .test-title{font-weight:700;font-size:12px;margin:1mm 1mm 2mm;text-transform:none}
+        /* The column header (No./Investigation/Unit/Range/...) is printed once
+           for the whole table; each test contributes a name row (kept with its
+           first result row) followed by its own parameter rows. */
         table.result-table{width:100%;border-collapse:collapse;table-layout:auto}
         .result-table thead{display:table-header-group}
         .result-table thead th{background:#87b7e8;color:#fff;padding:2.2mm 2mm;text-align:left;font-family:Arial,sans-serif;font-size:9.5px;font-weight:700;border:0}
         .result-table tbody td{padding:1.25mm 2mm;text-align:left;vertical-align:top;word-break:break-word;font-size:10px;border:0}
         .result-table tbody tr{break-inside:avoid;page-break-inside:avoid}
+        .test-name-row td{font-weight:700;font-size:11px;padding-top:3mm;border-top:1px solid #ccc!important}
         .no-col{width:10mm;text-align:center!important}
         .muted-cell{color:#777;font-style:italic}
-        .note{margin:2mm 1mm 0;font-size:9.5px}
-
-        @media print{
-          .test-block{break-inside:avoid;page-break-inside:avoid}
-          .result-table thead{display:table-header-group}
-          .lab-page-header,.lab-page-footer{display:grid}
-        }
+        .note-cell{color:#444;font-style:italic;font-size:9.5px}
       </style>
     </head>
     <body>
-      <div class="lab-page-header">
-        ${hospital.labHeader?`<img src="${assetUrl(hospital.labHeader)}">`:''}
-      </div>
+      <table class="page-frame">
+        <thead><tr><td class="lab-page-header">
+          ${hospital.labHeader?`<img src="${assetUrl(hospital.labHeader)}">`:''}
+        </td></tr></thead>
 
-      <div class="lab-page-footer">
-        <div class="footer-meta">
-          <div><b>CRM No :</b> ${escapeHtml(patient.patientCode||order?.orderNumber||'')}</div>
-          <div><b>Sample Recd. Time:</b> ${formatDateTime(order?.createdAtUtc)}</div>
-          <div><b>Report Time:</b> ${formatDateTime(reportDate)}</div>
-          <div><b>Patient Name:</b> ${escapeHtml(patient.name||'')}</div>
-          <div><b>Patient ID:</b> ${escapeHtml(patient.patientCode||'')}</div>
-        </div>
-        <div class="signature-block">
-          ${hospital.labSignature?`<img src="${assetUrl(hospital.labSignature)}">`:''}
-          <div class="sig-label">Authorized Signatory</div>
-          <div class="sig-name">${escapeHtml(hospital.labSignatoryName||'')}</div>
-          <div class="sig-qual">${escapeHtml(hospital.labSignatoryQualification||'')}</div>
-        </div>
-        <div class="page-box">Page <span class="page-number"></span></div>
-      </div>
+        <tfoot><tr><td>
+          <div class="lab-page-footer">
+            <div class="footer-meta">
+              <div><b>CRM No :</b> ${escapeHtml(patient.patientCode||order?.orderNumber||'')}</div>
+              <div><b>Sample Recd. Time:</b> ${formatDateTime(order?.createdAtUtc)}</div>
+              <div><b>Report Time:</b> ${formatDateTime(reportDate)}</div>
+              <div><b>Patient Name:</b> ${escapeHtml(patient.name||'')}</div>
+              <div><b>Patient ID:</b> ${escapeHtml(patient.patientCode||'')}</div>
+            </div>
+            <div class="signature-block">
+              ${hospital.labSignature?`<img src="${assetUrl(hospital.labSignature)}">`:''}
+              <div class="sig-label">Authorized Signatory</div>
+              <div class="sig-name">${escapeHtml(hospital.labSignatoryName||'')}</div>
+              <div class="sig-qual">${escapeHtml(hospital.labSignatoryQualification||'')}</div>
+            </div>
+            <div class="page-box">Page <span class="page-number"></span></div>
+          </div>
+        </td></tr></tfoot>
 
-      <main>
-        <div class="patient-info">
-          <div class="pi-row"><span><b>Name:</b> ${escapeHtml(patient.name||'')}</span><span><b>Age/Gender:</b> ${escapeHtml(patient.age??'')} Year(s) / ${escapeHtml(patient.gender||'')}</span></div>
-          <div class="pi-row"><span><b>Referred By:</b> N.A</span><span><b>Client Name:</b> N.A</span></div>
-          <div class="pi-row"><span><b>Collection Date:</b> ${formatDateTime(order?.createdAtUtc)}</span><span><b>Report Release Date:</b> ${formatDateTime(reportDate)}</span></div>
-        </div>
-        ${blocksHtml}
-      </main>
+        <tbody><tr><td>
+          <main>
+            <div class="patient-info">
+              <div class="pi-row"><span><b>Name:</b> ${escapeHtml(patient.name||'')}</span><span><b>Age/Gender:</b> ${escapeHtml(ageText(patient))} / ${escapeHtml(patient.gender||'')}</span></div>
+              <div class="pi-row"><span><b>Referred By:</b> N.A</span><span><b>Client Name:</b> N.A</span></div>
+              <div class="pi-row"><span><b>Collection Date:</b> ${formatDateTime(order?.createdAtUtc)}</span><span><b>Report Release Date:</b> ${formatDateTime(reportDate)}</span></div>
+            </div>
+            ${blocksHtml}
+          </main>
+        </td></tr></tbody>
+      </table>
 
       <script>
         const waitForImages=()=>Promise.all(Array.from(document.images).map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=img.onerror=resolve})));
@@ -228,7 +251,7 @@ async function printResult(t){
     patient:data.patient||{},
     order:data.order,
     reportDate:data.resultUpdatedAtUtc,
-    blocksHtml:buildTestBlockHtml(data)
+    blocksHtml:buildMergedTestsHtml([data])
   });
   openPrintFrame(html);
 }
@@ -253,7 +276,7 @@ async function printMergedResults(orderTestRows){
     patient:results[0]?.patient||{},
     order:results[0]?.order,
     reportDate,
-    blocksHtml:results.map(buildTestBlockHtml).join('')
+    blocksHtml:buildMergedTestsHtml(results)
   });
   openPrintFrame(html);
 }

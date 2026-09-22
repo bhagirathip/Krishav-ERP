@@ -5,6 +5,7 @@ import { can } from '../auth';
 import Pagination from '../components/Pagination.vue';
 import GridSearch from '../components/GridSearch.vue';
 import { useGrid } from '../composables/useGrid';
+import { ageText } from '../utils/age';
 
 const rows = ref([]);
 const pageSize = 10;
@@ -301,7 +302,7 @@ async function printPrescription(row) {
   <div class="content">
     <div class="patient-info">
       <div class="pi-row"><span><b>Patient:</b> ${data.patient.name}</span><span><b>Patient ID:</b> ${data.patient.patientCode}</span></div>
-      <div class="pi-row"><span><b>Age / Gender:</b> ${data.patient.age} / ${data.patient.gender}</span><span><b>Phone:</b> ${data.patient.phone}</span></div>
+      <div class="pi-row"><span><b>Age / Gender:</b> ${ageText(data.patient)} / ${data.patient.gender}</span><span><b>Phone:</b> ${data.patient.phone}</span></div>
       <div class="pi-row"><span><b>Doctor:</b> ${data.doctor?.name || '-'}</span><span><b>Specialisation:</b> ${data.doctor?.specialisation || '-'}</span></div>
     </div>
     <div class="vitals">${vitals}</div>

@@ -177,6 +177,12 @@ public class Patient
         get;
         set;
     }
+    public string AgeUnit
+    {
+        get;
+        set;
+    }
+    = "Years";
     public string Gender
     {
         get;

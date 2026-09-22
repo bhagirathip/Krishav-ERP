@@ -117,5 +117,3 @@ The API uses EF Core EnsureCreated on first run.
 - Bills now include optional DoctorId for accurate doctor-wise income attribution.
 - Reporting supports All/individual Doctor and Patient filters, doctor consultation counts, unique patient counts, category-wise income and income-share pie chart.
 - New local development DB: KrishavERPv52.
-#   K r i s h a v - E R P  
- 

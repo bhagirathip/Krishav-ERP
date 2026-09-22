@@ -5,6 +5,7 @@ import { can } from '../auth';
 import Pagination from '../components/Pagination.vue';
 import GridSearch from '../components/GridSearch.vue';
 import { useGrid } from '../composables/useGrid';
+import { ageText } from '../utils/age';
 
 const tab = ref('Unpaid');
 const rows = ref([]);
@@ -376,7 +377,7 @@ async function printBill(bill) {
     <div class="patient">
       <div><b>Patient:</b> ${data.patient?.name || data.bill.walkInPatientName || '-'}</div>
       <div><b>Patient ID:</b> ${data.patient?.patientCode || '-'}</div>
-      <div><b>Age / Gender:</b> ${data.patient ? `${data.patient.age} / ${data.patient.gender}` : '-'}</div>
+      <div><b>Age / Gender:</b> ${data.patient ? `${ageText(data.patient)} / ${data.patient.gender}` : '-'}</div>
       <div><b>Phone:</b> ${data.patient?.phone || '-'}</div>
       <div><b>Bill Type:</b> ${data.bill.billType}</div>
       ${data.referrer ? `<div><b>Referrer:</b> ${data.referrer.name} (${data.referrer.referrerCode})</div>` : ``}
