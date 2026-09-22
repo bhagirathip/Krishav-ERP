@@ -104,67 +104,95 @@ function buildTestBlockHtml(data){
 // trade-off: on a report long enough to spill onto a second page, the
 // footer only appears once at the very end, not repeated per page.
 function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
+  // The uploaded reference uses the configured lab letterhead on every page,
+  // one patient-information panel at the beginning of the report, continuous
+  // test sections, and a compact fixed footer on every printed page.
   return `<!doctype html>
   <html>
     <head>
       <title></title>
       <style>
-        @page{size:A4;margin:0}
+        @page{size:A4;margin:45mm 10mm 34mm 10mm}
         *{box-sizing:border-box}
-        html,body{height:100%}
-        body{margin:0;font-family:Arial,sans-serif;color:#000}
-        .page{min-height:297mm;display:flex;flex-direction:column}
-        .header img{width:100%;height:42mm;object-fit:fill;display:block}
-        .content{flex:1 0 auto;padding:0 12mm 0}
-        .patient-info{border-top:2px solid #000;margin-bottom:14px}
-        .pi-row{display:grid;grid-template-columns:1fr 1fr;gap:0 20px;padding:6px 0;font-size:15px}
-        .pi-row:last-child{border-bottom:2px solid #000}
-        .pi-row b{display:inline-block;min-width:112px}
-        .test-block{page-break-inside:avoid;margin-bottom:18px}
-        .test-title{font-weight:700;font-size:13px;margin:2px 0 6px}
+        html,body{margin:0;padding:0;font-family:"Times New Roman",serif;color:#111}
+        body{font-size:11.5px}
+
+        /* Repeated laboratory stationery */
+        .lab-page-header{position:fixed;top:-45mm;left:-10mm;right:-10mm;height:42mm;background:#fff}
+        .lab-page-header img{display:block;width:210mm;height:42mm;object-fit:fill}
+
+        /* Reference-style footer: repeated on every printed page. */
+        .lab-page-footer{position:fixed;bottom:-34mm;left:0;right:0;height:30mm;border-top:1px solid #222;background:#fff;padding:3mm 1mm 0;display:grid;grid-template-columns:1.35fr .9fr .55fr;column-gap:8mm;align-items:start;font-size:9px;line-height:1.35}
+        .footer-meta div{margin:0 0 1px}
+        .footer-meta b{font-weight:400}
+        .signature-block{text-align:center;align-self:start}
+        .signature-block img{display:block;max-height:11mm;max-width:42mm;margin:0 auto -1mm}
+        .signature-block .sig-label{margin-bottom:1px}
+        .signature-block .sig-name{font-weight:700;font-size:9.5px}
+        .signature-block .sig-qual{font-size:9px}
+        .page-box{text-align:right;align-self:end;padding-bottom:1mm;white-space:nowrap}
+        .page-box .page-number:after{content:counter(page)}
+
+        /* Printed once, directly below the configured lab header. */
+        .patient-info{border-top:1.5px solid #222;border-bottom:1.5px solid #222;margin:0 0 4mm;padding:2mm 1mm}
+        .pi-row{display:grid;grid-template-columns:1fr 1fr;gap:0 12mm;padding:1.1mm 0;font-size:10.5px}
+        .pi-row b{display:inline-block;min-width:27mm;font-weight:700}
+
+        /* A complete short test is kept together. If it cannot fit in the
+           remaining space, the browser moves it to the next page. Tests that
+           are taller than a printable page are allowed to continue naturally. */
+        .test-block{break-inside:avoid;page-break-inside:avoid;margin:0 0 5mm}
+        .test-title{font-weight:700;font-size:12px;margin:1mm 1mm 2mm;text-transform:none}
         table.result-table{width:100%;border-collapse:collapse;table-layout:auto}
-        .result-table thead th{background:#5b8fc9;color:#fff;padding:7px 8px;text-align:left;font-size:12px;font-weight:700}
-        .result-table tbody td{padding:6px 8px;text-align:left;vertical-align:top;word-break:break-word;font-size:12px}
-        .no-col{width:34px;text-align:center}
+        .result-table thead{display:table-header-group}
+        .result-table thead th{background:#87b7e8;color:#fff;padding:2.2mm 2mm;text-align:left;font-family:Arial,sans-serif;font-size:9.5px;font-weight:700;border:0}
+        .result-table tbody td{padding:1.25mm 2mm;text-align:left;vertical-align:top;word-break:break-word;font-size:10px;border:0}
+        .result-table tbody tr{break-inside:avoid;page-break-inside:avoid}
+        .no-col{width:10mm;text-align:center!important}
         .muted-cell{color:#777;font-style:italic}
-        .note{margin-top:8px;font-size:12px}
-        .report-footer{flex:0 0 auto;display:flex;justify-content:space-between;align-items:flex-end;border-top:1px solid #333;padding:10px 12mm;font-size:11px;color:#333}
-        .footer-meta div{margin:2px 0}
-        .signature-block{text-align:center}
-        .signature-block img{display:block;max-height:46px;max-width:160px;margin:0 auto 4px}
-        .signature-block .sig-label{font-size:11px;color:#333;margin-bottom:2px}
-        .signature-block .sig-name{font-weight:700;font-size:12px;border-top:1px solid #333;padding-top:3px;margin-top:2px}
-        .signature-block .sig-qual{font-size:11px;color:#333}
+        .note{margin:2mm 1mm 0;font-size:9.5px}
+
+        @media print{
+          .test-block{break-inside:avoid;page-break-inside:avoid}
+          .result-table thead{display:table-header-group}
+          .lab-page-header,.lab-page-footer{display:grid}
+        }
       </style>
     </head>
     <body>
-      <div class="page">
-        <div class="header">
-          ${hospital.labHeader?`<img src="${assetUrl(hospital.labHeader)}">`:''}
-        </div>
-        <div class="content">
-          <div class="patient-info">
-            <div class="pi-row"><span><b>Name:</b> ${escapeHtml(patient.name||'')}</span><span><b>Age/Gender:</b> ${escapeHtml(patient.age??'')} Years/${escapeHtml(patient.gender||'')}</span></div>
-            <div class="pi-row"><span><b>Referred By:</b> N.A</span><span><b>Client Name:</b> N.A</span></div>
-            <div class="pi-row"><span><b>Collection Date:</b> ${formatDateTime(order?.createdAtUtc)}</span><span><b>Report Release Date:</b> ${formatDateTime(reportDate)}</span></div>
-          </div>
-          ${blocksHtml}
-        </div>
-        <div class="report-footer">
-          <div class="footer-meta">
-            <div><b>Order No:</b> ${escapeHtml(order?.orderNumber||'')}</div>
-            <div><b>Patient:</b> ${escapeHtml(patient.name||'')} · ${escapeHtml(patient.patientCode||'')}</div>
-          </div>
-          <div class="signature-block">
-            <div class="sig-label">Authorized Signatory</div>
-            ${hospital.labSignature?`<img src="${assetUrl(hospital.labSignature)}">`:''}
-            <div class="sig-name">${escapeHtml(hospital.labSignatoryName||'')}</div>
-            <div class="sig-qual">${escapeHtml(hospital.labSignatoryQualification||'')}</div>
-          </div>
-        </div>
+      <div class="lab-page-header">
+        ${hospital.labHeader?`<img src="${assetUrl(hospital.labHeader)}">`:''}
       </div>
+
+      <div class="lab-page-footer">
+        <div class="footer-meta">
+          <div><b>CRM No :</b> ${escapeHtml(patient.patientCode||order?.orderNumber||'')}</div>
+          <div><b>Sample Recd. Time:</b> ${formatDateTime(order?.createdAtUtc)}</div>
+          <div><b>Report Time:</b> ${formatDateTime(reportDate)}</div>
+          <div><b>Patient Name:</b> ${escapeHtml(patient.name||'')}</div>
+          <div><b>Patient ID:</b> ${escapeHtml(patient.patientCode||'')}</div>
+        </div>
+        <div class="signature-block">
+          ${hospital.labSignature?`<img src="${assetUrl(hospital.labSignature)}">`:''}
+          <div class="sig-label">Authorized Signatory</div>
+          <div class="sig-name">${escapeHtml(hospital.labSignatoryName||'')}</div>
+          <div class="sig-qual">${escapeHtml(hospital.labSignatoryQualification||'')}</div>
+        </div>
+        <div class="page-box">Page <span class="page-number"></span></div>
+      </div>
+
+      <main>
+        <div class="patient-info">
+          <div class="pi-row"><span><b>Name:</b> ${escapeHtml(patient.name||'')}</span><span><b>Age/Gender:</b> ${escapeHtml(patient.age??'')} Year(s) / ${escapeHtml(patient.gender||'')}</span></div>
+          <div class="pi-row"><span><b>Referred By:</b> N.A</span><span><b>Client Name:</b> N.A</span></div>
+          <div class="pi-row"><span><b>Collection Date:</b> ${formatDateTime(order?.createdAtUtc)}</span><span><b>Report Release Date:</b> ${formatDateTime(reportDate)}</span></div>
+        </div>
+        ${blocksHtml}
+      </main>
+
       <script>
-        window.onload=()=>window.print();
+        const waitForImages=()=>Promise.all(Array.from(document.images).map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=img.onerror=resolve})));
+        window.onload=async()=>{await waitForImages();setTimeout(()=>window.print(),100)};
         window.onafterprint=()=>window.parent.postMessage('lab-print','*');
       <\/script>
     </body>

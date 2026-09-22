@@ -1,9 +1,0 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<!-- https://go.microsoft.com/fwlink/?LinkID=208121. -->
-<Project>
-  <PropertyGroup>
-    <_PublishTargetUrl>C:\Users\bhagirathip\Downloads\KRishav-ERP\KRishav-ERP\krishav-erp-v5-8\backend\KrishavERP.Api\bin\Release\net8.0\publish\</_PublishTargetUrl>
-    <History>True|2026-09-20T06:08:30.3965505Z||;True|2026-09-20T10:21:07.7961546+05:30||;True|2026-09-20T08:55:49.4952975+05:30||;True|2026-09-19T20:33:55.4608557+05:30||;True|2026-09-19T19:50:58.3437547+05:30||;True|2026-09-19T19:17:57.6964976+05:30||;True|2026-09-19T18:24:12.4862133+05:30||;True|2026-09-19T09:06:28.1214857+05:30||;True|2026-09-18T19:42:11.8673303+05:30||;True|2026-09-16T17:54:34.0502133+05:30||;</History>
-    <LastFailureDetails />
-  </PropertyGroup>
-</Project>

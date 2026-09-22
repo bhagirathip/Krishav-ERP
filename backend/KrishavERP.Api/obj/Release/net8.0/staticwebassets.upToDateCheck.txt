@@ -1,2 +1,0 @@
-wwwroot\opd-header.png
-wwwroot\uploads\pharmacy\purchase-invoices\invoice-2-7736bfff95034a6f93ae4032f0007d64.csv
