@@ -1,0 +1,9 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/frontend/node_modules/*
+/.vs/*
+/backend/KrishavERP.Api/.vs/*
+/backend/KrishavERP.Api/bin/*
+/backend/KrishavERP.Api/obj/*
