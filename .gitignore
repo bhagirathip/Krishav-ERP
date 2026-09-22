@@ -7,3 +7,27 @@
 /backend/KrishavERP.Api/.vs/*
 /backend/KrishavERP.Api/bin/*
 /backend/KrishavERP.Api/obj/*
+
+
+# Visual Studio
+.vs/
+**/.vs/
+
+# .NET build output
+bin/
+obj/
+**/bin/
+**/obj/
+
+# User-specific Visual Studio files
+*.user
+*.suo
+
+# Node/Vue
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Logs
+*.log
