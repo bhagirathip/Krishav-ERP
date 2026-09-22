@@ -1,0 +1,13 @@
+<script setup>
+import { computed,onMounted,ref } from 'vue';import {api} from '../api';
+const now=new Date();const year=ref(now.getFullYear()),month=ref(now.getMonth()+1);const data=ref({daysInMonth:0,rows:[]});const saving=ref(false);
+const days=computed(()=>Array.from({length:Number(data.value.daysInMonth||0)},(_,i)=>i+1));
+const statusOptions=[{v:'',s:''},{v:'Present',s:'P'},{v:'Absent',s:'A'},{v:'WeekOff',s:'W'},{v:'Leave',s:'L'},{v:'Half Day',s:'H'}];
+async function load(){data.value=(await api.get('/staff/attendance-month',{params:{year:year.value,month:month.value}})).data;}
+function short(v){return statusOptions.find(x=>x.v===v)?.s||'';}
+async function save(){saving.value=true;try{const items=[];for(const staff of data.value.rows||[])for(const day of staff.days||[])items.push({staffId:staff.id,day:day.day,status:day.status});await api.post('/staff/attendance-month',{year:year.value,month:month.value,items});alert('Monthly attendance saved.');}finally{saving.value=false;}}
+onMounted(load);
+</script>
+<template><h1>Staff Attendance</h1><div class="toolbar"><label>Year<input type="number" min="2020" max="2100" v-model.number="year"></label><label>Month<select v-model.number="month"><option v-for="m in 12" :key="m" :value="m">{{new Date(2000,m-1,1).toLocaleString('en',{month:'long'})}}</option></select></label><button @click="load">Apply</button><button @click="save" :disabled="saving">{{saving?'Saving...':'Save Attendance'}}</button></div>
+<div class="attendance-month-wrap"><table class="table attendance-month-table"><thead><tr><th class="sticky-col staff-name-col">Staff Name</th><th class="sticky-col designation-col">Designation</th><th v-for="d in days" :key="d" :class="{'today-attendance':year===now.getFullYear()&&month===now.getMonth()+1&&d===now.getDate()}">{{d}}</th></tr></thead><tbody><tr v-for="staff in data.rows" :key="staff.id"><td class="sticky-col staff-name-col"><b>{{staff.name}}</b><div class="muted">{{staff.staffCode}}</div></td><td class="sticky-col designation-col">{{staff.designation||'-'}}</td><td v-for="day in staff.days" :key="day.day" class="attendance-cell"><select v-model="day.status" :title="day.status"><option v-for="o in statusOptions" :key="o.v || 'blank'" :value="o.v">{{o.v || 'Not Marked'}}</option></select><div class="attendance-letter">{{short(day.status)}}</div></td></tr></tbody></table></div>
+<div class="muted" style="margin-top:10px">P = Present · A = Absent · W = Week Off · L = Leave · H = Half Day. Previous months can be selected and edited.</div></template>

@@ -1,0 +1,1 @@
+USE KrishavERPv52;\nGO\n\nIF COL_LENGTH('dbo.PharmacySales', 'OutsideDoctorName') IS NULL\nBEGIN\n    ALTER TABLE dbo.PharmacySales\n    ADD OutsideDoctorName NVARCHAR(256) NULL;\nEND\nGO\n

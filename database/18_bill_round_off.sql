@@ -1,0 +1,8 @@
+USE KrishavERPv52;
+GO
+
+IF COL_LENGTH('dbo.Bills','RoundOff') IS NULL
+BEGIN
+    ALTER TABLE dbo.Bills ADD RoundOff INT NOT NULL CONSTRAINT DF_Bills_RoundOff DEFAULT 0;
+END
+GO
