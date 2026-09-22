@@ -16,7 +16,7 @@ Fields:
 Default types:
 - Tablet
 - Cream
-- Injection
+- Injection 
 - Spray
 
 Rules:
