@@ -36,6 +36,7 @@ import DoctorSettlements from './views/DoctorSettlements.vue';
 import ExpenseReport from './views/ExpenseReport.vue';
 import LabReport from './views/LabReport.vue';
 import PharmacyReport from './views/PharmacyReport.vue';
+import PharmacyStockReport from './views/PharmacyStockReport.vue';
 import CbcAnalyzerResults from './views/CbcAnalyzerResults.vue';
 
 const router = createRouter({
@@ -53,6 +54,7 @@ const router = createRouter({
     { path: '/pharmacy/purchase', component: PharmacyPurchase, meta: { module: 'PHARMACY' } },
     { path: '/pharmacy/sales', component: PharmacySales, meta: { module: 'PHARMACY' } },
     { path: '/pharmacy/report', component: PharmacyReport, meta: { module: 'PHARMACY' } },
+    { path: '/pharmacy/stock-report', component: PharmacyStockReport, meta: { module: 'PHARMACY' } },
     { path: '/lab', redirect: '/lab/master' },
     { path: '/lab/master', component: LabMaster, meta: { module: 'LAB' } },
     { path: '/lab/patient-tests', component: LabPatientTests, meta: { module: 'LAB' } },

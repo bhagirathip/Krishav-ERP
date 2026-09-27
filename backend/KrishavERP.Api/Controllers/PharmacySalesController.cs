@@ -174,6 +174,28 @@ public class PharmacySalesController : ControllerBase
             });
         }
 
+        // Medicine dispensed against an ongoing IPD stay, rather than a
+        // walk-in/OPD counter sale - patient owes for it via their IPD
+        // account (settled when the stay is billed), not paid up front at
+        // the pharmacy counter. Mirrors how LabController.CreateOrder
+        // resolves the doctor from the admission when IpdAdmissionId is set.
+        IpdAdmission? ipdAdmission = null;
+        if (request.IpdAdmissionId.HasValue)
+        {
+            ipdAdmission = await _db.IpdAdmissions.FindAsync(request.IpdAdmissionId.Value);
+            if (ipdAdmission == null || ipdAdmission.Status != "Admitted")
+            {
+                return BadRequest(new { message = "Selected IPD admission was not found or is no longer active." });
+            }
+
+            if (!request.PatientId.HasValue || request.PatientId.Value != ipdAdmission.PatientId)
+            {
+                return BadRequest(new { message = "Patient does not match the selected IPD admission." });
+            }
+        }
+
+        var resolvedDoctorId = request.DoctorId ?? ipdAdmission?.DoctorId;
+
         var linkedPatient = request.PatientId.HasValue
             ? await _db.Patients.FindAsync(request.PatientId.Value)
             : null;
@@ -183,23 +205,24 @@ public class PharmacySalesController : ControllerBase
         var sale = new PharmacySale
         {
             PatientId = request.PatientId,
-            DoctorId = request.DoctorId,
+            DoctorId = resolvedDoctorId,
             OutsideDoctorName = string.IsNullOrWhiteSpace(request.OutsideDoctorName)
                 ? null
                 : request.OutsideDoctorName.Trim(),
             WalkInPatientName = request.PatientId.HasValue ? null : request.WalkInPatientName?.Trim(),
             WalkInPhone = request.PatientId.HasValue ? null : request.WalkInPhone?.Trim(),
             PaymentMode = request.PaymentMode,
-            SaleDateUtc = DateTime.Now
+            SaleDateUtc = DateTime.Now,
+            IpdAdmissionId = request.IpdAdmissionId
         };
 
         var bill = new Bill
         {
             PatientId = request.PatientId,
-            DoctorId = request.DoctorId,
+            DoctorId = resolvedDoctorId,
             ReferrerId = linkedPatient?.ReferrerId,
             BillType = "Pharmacy",
-            Status = "Paid",
+            Status = request.IpdAdmissionId.HasValue ? "Unpaid" : "Paid",
             CreatedAtUtc = DateTime.Now
         };
 
@@ -331,20 +354,26 @@ public class PharmacySalesController : ControllerBase
         bill.DiscountAmount = 0;
         bill.DiscountPercent = 0;
         bill.NetAmount = grandTotal;
-        bill.PaidAmount = grandTotal;
+        bill.PaidAmount = request.IpdAdmissionId.HasValue ? 0 : grandTotal;
 
         _db.Bills.Add(bill);
         await _db.SaveChangesAsync();
 
         bill.BillNumber = $"BILL-{DateTime.Now:yyyyMMdd}-{bill.Id:000000}";
 
-        _db.Payments.Add(new Payment
+        // Walk-in/OPD pharmacy sales are cash-and-carry, paid in full at the
+        // counter. IPD dispensing is on credit against the patient's stay -
+        // no payment is collected now, so no Payment row is recorded.
+        if (!request.IpdAdmissionId.HasValue)
         {
-            BillId = bill.Id,
-            Amount = grandTotal,
-            Mode = request.PaymentMode,
-            PaidAtUtc = DateTime.Now
-        });
+            _db.Payments.Add(new Payment
+            {
+                BillId = bill.Id,
+                Amount = grandTotal,
+                Mode = request.PaymentMode,
+                PaidAtUtc = DateTime.Now
+            });
+        }
 
         sale.BillId = bill.Id;
         sale.TotalAmount = grandTotal;
@@ -478,6 +507,113 @@ public class PharmacySalesController : ControllerBase
             TotalSalesAmount = sales.Sum(x => x.TotalAmount),
             SoldProducts = soldProducts,
             RemainingStock = remaining
+        });
+    }
+
+    // Grouped by (ProductName, Mrp) rather than by individual batch, since a
+    // product/price combination is what a stock ledger report cares about -
+    // batches are an implementation detail of how purchases/expiry tracking
+    // works internally. Purchases/Sales are scoped to the selected date
+    // range (or all time, when neither from/to is given); Closing Stock is
+    // always the current live balance (PharmacyPurchaseItem.RemainingTablets
+    // has no historical snapshot to reconstruct a past closing balance from -
+    // see PharmacyPurchasesController/PharmacyExpiryController for where
+    // that counter is mutated).
+    [HttpGet("stock-report")]
+    public async Task<IActionResult> StockReport(
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
+        [FromQuery] string? search)
+    {
+        var purchaseItemsQuery = _db.PharmacyPurchaseItems
+            .Include(x => x.MedicineType)
+            .Include(x => x.PurchaseInvoice)
+            .Where(x => x.PurchaseInvoice != null && !x.PurchaseInvoice.IsDeleted);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var text = search.Trim();
+            purchaseItemsQuery = purchaseItemsQuery.Where(x => x.ProductName.Contains(text));
+        }
+
+        var purchaseItems = await purchaseItemsQuery.ToListAsync();
+
+        var purchaseItemGroupKey = purchaseItems.ToDictionary(x => x.Id, x => (x.ProductName, x.Mrp));
+
+        var relevantSaleItems = await _db.PharmacySaleItems
+            .Where(x => purchaseItemGroupKey.Keys.Contains(x.PurchaseItemId))
+            .ToListAsync();
+
+        var saleIds = relevantSaleItems.Select(x => x.PharmacySaleId).Distinct().ToList();
+        var saleDates = await _db.PharmacySales
+            .Where(x => saleIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => x.SaleDateUtc);
+
+        var start = from?.Date;
+        var end = to?.Date.AddDays(1);
+        bool InRange(DateTime d) => !start.HasValue || (d >= start.Value && d < end!.Value);
+
+        var salesBaseUnitsByGroup = relevantSaleItems
+            .Where(x => saleDates.TryGetValue(x.PharmacySaleId, out var d) && InRange(d))
+            .GroupBy(x => purchaseItemGroupKey[x.PurchaseItemId])
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityInTablets));
+
+        string PackAndUnitLabel(string? medicineTypeName)
+        {
+            if (string.Equals(medicineTypeName, "Injection", StringComparison.OrdinalIgnoreCase))
+                return "Pack|Vial";
+            if (string.Equals(medicineTypeName, "Tablet", StringComparison.OrdinalIgnoreCase) || medicineTypeName == null)
+                return "Strip|Tablet";
+            return "Unit|Unit";
+        }
+
+        var rows = purchaseItems
+            .GroupBy(x => (x.ProductName, x.Mrp))
+            .Select(g =>
+            {
+                var sample = g.First();
+                var labels = PackAndUnitLabel(sample.MedicineType?.Name).Split('|');
+                var packLabel = labels[0];
+                var unitLabel = labels[1];
+                var unitsPerPack = packLabel == unitLabel ? 1 : Math.Max(sample.TabletsPerStrip, 1);
+
+                var purchaseBaseUnits = g
+                    .Where(x => InRange(x.PurchaseInvoice!.InvoiceDate))
+                    .Sum(x => (x.Quantity + x.Bonus) * Math.Max(x.TabletsPerStrip, 1));
+
+                var salesBaseUnits = salesBaseUnitsByGroup.TryGetValue(g.Key, out var sold) ? sold : 0;
+                var closingBaseUnits = g.Sum(x => x.RemainingTablets);
+                var closingStockAmount = Math.Round(closingBaseUnits * (g.Key.Mrp / unitsPerPack), 2);
+
+                string Format(int baseUnits)
+                {
+                    if (packLabel == unitLabel) return $"{baseUnits} {unitLabel}";
+                    var packs = baseUnits / unitsPerPack;
+                    var loose = baseUnits % unitsPerPack;
+                    return loose == 0 ? $"{packs} {packLabel}" : $"{packs} {packLabel} {loose} {unitLabel}";
+                }
+
+                return new
+                {
+                    ProductName = g.Key.ProductName,
+                    Mrp = g.Key.Mrp,
+                    PurchasesBaseUnits = purchaseBaseUnits,
+                    PurchasesText = Format(purchaseBaseUnits),
+                    SalesBaseUnits = salesBaseUnits,
+                    SalesText = Format(salesBaseUnits),
+                    ClosingStockBaseUnits = closingBaseUnits,
+                    ClosingStockText = Format(closingBaseUnits),
+                    ClosingStockAmount = closingStockAmount
+                };
+            })
+            .OrderBy(x => x.ProductName)
+            .ThenBy(x => x.Mrp)
+            .ToList();
+
+        return Ok(new
+        {
+            rows,
+            totalClosingStockAmount = Math.Round(rows.Sum(x => x.ClosingStockAmount), 2)
         });
     }
 }

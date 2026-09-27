@@ -165,6 +165,7 @@ onMounted(async () => {
           <router-link class="submenu-link" to="/pharmacy/purchase">Purchase</router-link>
           <router-link class="submenu-link" to="/pharmacy/sales">Sales</router-link>
           <router-link class="submenu-link" to="/pharmacy/expiry">Expiry Medicine</router-link>
+          <router-link class="submenu-link" to="/pharmacy/stock-report">Stock Report</router-link>
         </div>
       </div>
 

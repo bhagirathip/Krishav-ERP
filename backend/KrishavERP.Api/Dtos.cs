@@ -613,6 +613,7 @@ public class PharmacySaleRequest
     public string? WalkInPatientName { get; set; }
     public string? WalkInPhone { get; set; }
     public string PaymentMode { get; set; } = "Cash";
+    public int? IpdAdmissionId { get; set; }
     public List<PharmacySaleLineRequest> Items { get; set; } = new();
 }
 

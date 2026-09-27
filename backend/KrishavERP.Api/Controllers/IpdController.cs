@@ -30,8 +30,9 @@ public class IpdController:ControllerBase
         var dn=await (from n in db.IpdDoctorNotes where n.IpdAdmissionId==id join doc in db.Doctors on n.DoctorId equals doc.Id select new{n.Id,n.Suggestion,n.CreatedAtUtc,DoctorName=doc.Name}).OrderByDescending(x=>x.CreatedAtUtc).ToListAsync();
         var nn=await db.IpdNursingNotes.Where(x=>x.IpdAdmissionId==id).OrderByDescending(x=>x.CreatedAtUtc).ToListAsync();
         var labs=await db.LabOrders.Where(x=>x.IpdAdmissionId==id).OrderByDescending(x=>x.Id).ToListAsync();
+        var pharmacySales=await db.PharmacySales.Include(x=>x.Items).Where(x=>x.IpdAdmissionId==id).OrderByDescending(x=>x.Id).ToListAsync();
         var bills=await db.Bills.Include(x=>x.Items).Where(x=>x.PatientId==a.PatientId&&x.BillType=="IPD"&&x.CreatedAtUtc>=a.AdmittedAtUtc).OrderByDescending(x=>x.Id).ToListAsync();
-        return Ok(new{admission=a,patient=p,doctor=d,bed,vitals,doctorNotes=dn,nursingNotes=nn,labOrders=labs,bills});
+        return Ok(new{admission=a,patient=p,doctor=d,bed,vitals,doctorNotes=dn,nursingNotes=nn,labOrders=labs,pharmacySales,bills});
     }
     [HttpPost("convert/{opdVisitId}")]
     public async Task<IActionResult> Convert(int opdVisitId,ConvertIpdRequest r)

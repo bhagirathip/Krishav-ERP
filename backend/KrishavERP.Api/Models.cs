@@ -1376,6 +1376,9 @@ public class PharmacySale
     public string PaymentMode { get; set; } = "Cash";
     public decimal TotalAmount { get; set; }
     public DateTime SaleDateUtc { get; set; } = DateTime.Now;
+    // Set when this sale is medicine dispensed against an ongoing IPD stay
+    // rather than a walk-in/OPD counter sale - see PharmacySalesController.Create.
+    public int? IpdAdmissionId { get; set; }
     public List<PharmacySaleItem> Items { get; set; } = new();
 }
 
