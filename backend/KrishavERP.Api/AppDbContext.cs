@@ -53,6 +53,9 @@ public class AppDbContext : DbContext
     public DbSet<DoctorSettlement> DoctorSettlements => Set<DoctorSettlement>();
     public DbSet<PharmacyPurchasePayment> PharmacyPurchasePayments => Set<PharmacyPurchasePayment>();
     public DbSet<LabPurchaseExpense> LabPurchaseExpenses => Set<LabPurchaseExpense>();
+    public DbSet<CbcAnalyzerResult> CbcAnalyzerResults => Set<CbcAnalyzerResult>();
+    public DbSet<CbcAnalyzerResultItem> CbcAnalyzerResultItems => Set<CbcAnalyzerResultItem>();
+    public DbSet<CbcAnalyzerImage> CbcAnalyzerImages => Set<CbcAnalyzerImage>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<AppUser>().HasIndex(x=>x.Username).IsUnique();
@@ -177,5 +180,18 @@ public class AppDbContext : DbContext
         b.Entity<LabTest>().HasMany(x=>x.Components).WithOne().HasForeignKey(x=>x.LabTestId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<LabOrder>().HasMany(x=>x.Tests).WithOne().HasForeignKey(x=>x.LabOrderId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<LabOrderTest>().HasMany(x=>x.Results).WithOne().HasForeignKey(x=>x.LabOrderTestId).OnDelete(DeleteBehavior.Cascade);
+
+        b.Entity<CbcAnalyzerResult>().HasIndex(x => x.ReceivedAtUtc);
+        b.Entity<CbcAnalyzerResult>().HasIndex(x => x.SampleId);
+        b.Entity<CbcAnalyzerResult>()
+            .HasMany(x => x.Items)
+            .WithOne()
+            .HasForeignKey(x => x.CbcAnalyzerResultId)
+            .OnDelete(DeleteBehavior.Cascade);
+        b.Entity<CbcAnalyzerResult>()
+            .HasMany(x => x.Images)
+            .WithOne()
+            .HasForeignKey(x => x.CbcAnalyzerResultId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

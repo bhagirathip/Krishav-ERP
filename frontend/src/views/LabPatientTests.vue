@@ -149,7 +149,7 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
         .lab-page-footer{border-top:1px solid #222;padding:3mm 1mm 2mm;display:grid;grid-template-columns:1.35fr .9fr .55fr;column-gap:8mm;align-items:start;font-size:9px;line-height:1.35}
         .footer-meta div{margin:0 0 1px}
         .footer-meta b{font-weight:400}
-        .signature-block{text-align:center;align-self:start}
+        .signature-block{text-align:right;align-self:start}
         .signature-block img{display:block;max-height:11mm;max-width:42mm;margin:0 auto -1mm}
         .signature-block .sig-label{margin-bottom:1px}
         .signature-block .sig-name{font-weight:700;font-size:9.5px}
@@ -167,7 +167,7 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
            first result row) followed by its own parameter rows. */
         table.result-table{width:100%;border-collapse:collapse;table-layout:auto}
         .result-table thead{display:table-header-group}
-        .result-table thead th{background:#87b7e8;color:#fff;padding:2.2mm 2mm;text-align:left;font-family:Arial,sans-serif;font-size:9.5px;font-weight:700;border:0}
+        .result-table thead th{background:#91C2F7;color:#fff;padding:2.2mm 2mm;text-align:left;font-family:Arial,sans-serif;font-size:9.5px;font-weight:700;border:0}
         .result-table tbody td{padding:1.25mm 2mm;text-align:left;vertical-align:top;word-break:break-word;font-size:10px;border:0}
         .result-table tbody tr{break-inside:avoid;page-break-inside:avoid}
         .test-name-row td{font-weight:700;font-size:11px;padding-top:3mm;border-top:1px solid #ccc!important}
@@ -197,7 +197,7 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
               <div class="sig-name">${escapeHtml(hospital.labSignatoryName||'')}</div>
               <div class="sig-qual">${escapeHtml(hospital.labSignatoryQualification||'')}</div>
             </div>
-            <div class="page-box">Page <span class="page-number"></span></div>
+            <!--<div class="page-box">Page <span class="page-number"></span></div>-->
           </div>
         </td></tr></tfoot>
 

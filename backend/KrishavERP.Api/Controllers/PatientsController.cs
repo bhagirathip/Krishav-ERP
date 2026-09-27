@@ -134,6 +134,7 @@ public class PatientsController : ControllerBase
                 OtStartAtUtc = latestOt?.StartAtUtc,
                 BloodPressure = latestOpd?.BloodPressure,
                 TemperatureC = latestOpd?.TemperatureC,
+                Pulse = latestOpd?.Pulse,
                 WeightKg = latestOpd?.WeightKg,
                 HeightCm = latestOpd?.HeightCm,
                 Spo2 = latestOpd?.Spo2,
@@ -147,7 +148,7 @@ public class PatientsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Add(PatientCreateRequest request)
     {
-        var errors = Validate(request);
+        var errors = await Validate(request);
         if (errors.Count > 0)
         {
             return BadRequest(new
@@ -234,6 +235,7 @@ public class PatientsController : ControllerBase
                     : "OPD",
                 BloodPressure = request.BloodPressure,
                 TemperatureC = request.TemperatureC,
+                Pulse = request.Pulse,
                 WeightKg = request.WeightKg,
                 HeightCm = request.HeightCm,
                 Spo2 = request.Spo2,
@@ -273,6 +275,7 @@ public class PatientsController : ControllerBase
                 VisitType = "Appointment",
                 BloodPressure = request.BloodPressure,
                 TemperatureC = request.TemperatureC,
+                Pulse = request.Pulse,
                 WeightKg = request.WeightKg,
                 HeightCm = request.HeightCm,
                 Spo2 = request.Spo2,
@@ -367,7 +370,7 @@ public class PatientsController : ControllerBase
             return NotFound(new { message = "Patient not found." });
         }
 
-        var errors = Validate(request, requireType: false);
+        var errors = await Validate(request, requireType: false);
         if (errors.Count > 0)
         {
             return BadRequest(new
@@ -412,6 +415,7 @@ public class PatientsController : ControllerBase
             latestOpd.DoctorId = request.DoctorId;
             latestOpd.BloodPressure = request.BloodPressure;
             latestOpd.TemperatureC = request.TemperatureC;
+            latestOpd.Pulse = request.Pulse;
             latestOpd.WeightKg = request.WeightKg;
             latestOpd.HeightCm = request.HeightCm;
             latestOpd.Spo2 = request.Spo2;
@@ -511,7 +515,7 @@ public class PatientsController : ControllerBase
         return Ok(saved);
     }
 
-    private List<string> Validate(PatientCreateRequest request, bool requireType = true)
+    private async Task<List<string>> Validate(PatientCreateRequest request, bool requireType = true)
     {
         var errors = new List<string>();
 
@@ -531,8 +535,23 @@ public class PatientsController : ControllerBase
         if (!Regex.IsMatch(request.Phone ?? string.Empty, @"^[6-9]\d{9}$"))
             errors.Add("Phone number must be a valid 10-digit Indian mobile number.");
 
-        if (requireType && !new[] { "OPD", "Emergency", "IPD", "OT", "Appointment" }.Contains(request.RegistrationType))
-            errors.Add("Patient type is required.");
+        if (requireType)
+        {
+            // The registration type dropdown is populated from BillTypeMaster
+            // (e.g. OPD/IPD/Lab/Pharmacy/Emergency/OT/Dressing/Dental), not a
+            // fixed enum - validating against a separately hand-maintained
+            // literal list here meant selecting a type like "Lab" that isn't
+            // in the doctor-required list below still failed with "Patient
+            // type is required." Validate against the real source of truth
+            // instead.
+            var activeTypes = await _db.BillTypes
+                .Where(x => x.IsActive)
+                .Select(x => x.Name)
+                .ToListAsync();
+
+            if (string.IsNullOrWhiteSpace(request.RegistrationType) || !activeTypes.Contains(request.RegistrationType))
+                errors.Add("Patient type is required.");
+        }
 
         if (new[] { "OPD", "Emergency", "IPD", "OT", "Appointment" }.Contains(request.RegistrationType) && !request.DoctorId.HasValue)
             errors.Add("Doctor is required.");
@@ -572,6 +591,12 @@ public class PatientsController : ControllerBase
             (request.Spo2 < 50 || request.Spo2 > 100))
         {
             errors.Add("SpO₂ must be between 50 and 100.");
+        }
+
+        if (request.Pulse.HasValue &&
+            (request.Pulse < 30 || request.Pulse > 250))
+        {
+            errors.Add("Pulse must be between 30 and 250 bpm.");
         }
 
         if (request.BillDate.HasValue && request.BillDate.Value.Date > DateTime.Now.Date)

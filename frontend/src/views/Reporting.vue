@@ -99,10 +99,6 @@ async function load() {
   await loadReports();
 }
 
-function maxConsulted() {
-  return Math.max(1, ...doctorRows.value.map(x => Number(x.patientCount || 0)));
-}
-
 function maxDoctorIncome() {
   return Math.max(1, ...doctorRows.value.map(x => Number(x.total || 0)));
 }
@@ -265,17 +261,27 @@ onMounted(load);
     <div class="card executive-card"><span>Pharmacy Bills</span><b>{{executive.pharmacyBills || 0}}</b></div>
     <div class="card executive-card money-card"><span>Gross Revenue</span><b>₹{{money(executive.grossRevenue)}}</b></div>
     <div class="card executive-card money-card"><span>Discounts</span><b>₹{{money(executive.discounts)}}</b></div>
-    <div class="card executive-card money-card"><span>Net Revenue</span><b>₹{{money(executive.netRevenue)}}</b></div>
+    <div class="card executive-card money-card"><span>Net Revenue</span><b>₹{{money(executive.netRevenue)}}</b><small>Billed amount, before doctor's share</small></div>
+    <div class="card executive-card money-card"><span>Doctor Professional Fees</span><b>₹{{money(executive.doctorProfessionalFees)}}</b><small>Consultation/OT charge owed to doctors</small></div>
+    <div class="card executive-card money-card"><span>Hospital Revenue</span><b>₹{{money(executive.hospitalRevenueAfterDoctorShare)}}</b><small>Net revenue after doctor's share</small></div>
+    <div class="card executive-card money-card"><span>Doctor Payments</span><b>₹{{money(executive.doctorPayments)}}</b></div>
+    <div class="card executive-card money-card"><span>Doctor Outstanding</span><b>₹{{money(executive.doctorOutstanding)}}</b></div>
     <div class="card executive-card money-card"><span>Collections</span><b>₹{{money(executive.collections)}}</b></div>
     <div class="card executive-card money-card"><span>Outstanding</span><b>₹{{money(executive.outstanding)}}</b></div>
     <div class="card executive-card money-card"><span>Expenses</span><b>₹{{money(executive.expenses)}}</b><small>Recorded pharmacy purchases</small></div>
     <div class="card executive-card money-card"><span>Expiry Returns</span><b>₹{{money(executive.expiryReturnedAmount)}}</b></div>
     <div class="card executive-card money-card"><span>Expiry Loss</span><b>₹{{money(executive.expiryLossAmount)}}</b></div>
-    <div class="card executive-card money-card"><span>Operating Result</span><b>₹{{money(executive.operatingResult)}}</b></div>
+    <div class="card executive-card money-card"><span>Operating Result</span><b>₹{{money(executive.operatingResult)}}</b><small>Hospital revenue minus expenses</small></div>
   </div>
 
   <div class="card monthly-revenue-card">
-    <div class="page-head"><div><h2>Month-wise Revenue Progress</h2><div class="muted">Gross, discount, net revenue, collections and recorded expenses.</div></div><label>Year<input type="number" min="2020" max="2100" v-model.number="selectedYear"><button @click="loadReports">Apply</button></label></div>
+    <div class="page-head">
+      <div><h2>Month-wise Revenue Progress</h2><div class="muted">Gross, discount, net revenue, collections and recorded expenses.</div></div>
+    </div>
+    <div class="toolbar">
+      <label>Year<input type="number" min="2020" max="2100" v-model.number="selectedYear"></label>
+      <button @click="loadReports">Apply</button>
+    </div>
     <div class="monthly-vertical-chart">
       <div class="monthly-y-axis">
         <span>₹{{ money(maxMonthlyNet()) }}</span>
@@ -312,22 +318,10 @@ onMounted(load);
         </div>
       </div>
     </div>
-    <table class="table"><tr><th>Month</th><th>Gross</th><th>Discount</th><th>Net</th><th>Collections</th><th>Expenses</th><th>Operating Result</th></tr><tr v-for="row in monthlyRevenue.rows" :key="'m-'+row.month"><td>{{row.monthName}}</td><td>₹{{money(row.gross)}}</td><td>₹{{money(row.discount)}}</td><td><b>₹{{money(row.net)}}</b></td><td>₹{{money(row.collections)}}</td><td>₹{{money(row.expenses)}}</td><td>₹{{money(row.operatingResult)}}</td></tr></table>
+    <table class="table"><tr><th>Month</th><th>Gross</th><th>Discount</th><th>Net</th><th>Doctor Fees</th><th>Hospital Revenue</th><th>Collections</th><th>Expenses</th><th>Operating Result</th></tr><tr v-for="row in monthlyRevenue.rows" :key="'m-'+row.month"><td>{{row.monthName}}</td><td>₹{{money(row.gross)}}</td><td>₹{{money(row.discount)}}</td><td>₹{{money(row.net)}}</td><td>₹{{money(row.doctorProfessionalFees)}}</td><td><b>₹{{money(row.hospitalRevenueAfterDoctorShare)}}</b></td><td>₹{{money(row.collections)}}</td><td>₹{{money(row.expenses)}}</td><td>₹{{money(row.operatingResult)}}</td></tr></table>
   </div>
 
   <div class="report-grid">
-    <section class="card">
-      <h2>Patients Consulted by Doctor</h2>
-      <div v-if="!doctorRows.length" class="muted">No consultation data for this period.</div>
-      <div v-for="row in pagedDoctorRows" :key="row.doctorId" class="bar-row">
-        <div class="bar-label">{{ row.doctorName }}</div>
-        <div class="bar-track">
-          <div class="bar-fill" :style="{ width: (row.patientCount / maxConsulted() * 100) + '%' }"></div>
-        </div>
-        <div class="bar-value">{{ row.patientCount }} patient(s)</div>
-      </div>
-    </section>
-
     <section class="card">
       <h2>Income Source %</h2>
       <div class="pie-layout">
@@ -366,6 +360,7 @@ onMounted(load);
 
   <h2>Doctor-wise Report</h2>
   <div class="chart-card card">
+    <div v-if="!doctorRows.length" class="muted">No doctor income data for this period.</div>
     <div v-for="row in pagedDoctorRows" :key="row.doctorId" class="bar-row">
       <div class="bar-label">{{ row.doctorName }}</div>
       <div class="bar-track">
@@ -396,8 +391,9 @@ onMounted(load);
     <Pagination :page="doctorPage" :page-count="doctorPageCount" :total="sortedDoctorRows.length" :page-size="pageSize" @update:page="doctorPage = $event" />
   </div>
 
-  <h2 style="margin-top: 30px">Patient-wise Report</h2>
+  <h2 class="report-section-heading">Patient-wise Report</h2>
   <div class="chart-card card">
+    <div v-if="!patientRows.length" class="muted">No patient income data for this period.</div>
     <div v-for="row in patientRows.slice(0, 15)" :key="row.patientId" class="bar-row">
       <div class="bar-label">{{ row.name }}</div>
       <div class="bar-track">
@@ -435,7 +431,7 @@ onMounted(load);
       <p class="muted">These categories are used by Billing and by Doctor/Patient income reports.</p>
 
       <div class="toolbar">
-        <input v-model="categoryForm.name" style="max-width: 360px" placeholder="Category name">
+        <input v-model="categoryForm.name" class="category-name-input" placeholder="Category name">
         <button @click="saveCategory">{{ categoryForm.id ? 'Update' : 'Add Category' }}</button>
         <button v-if="categoryForm.id" class="secondary" @click="categoryForm = { name: '' }">Cancel Edit</button>
       </div>

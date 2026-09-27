@@ -395,12 +395,18 @@ public class PharmacySalesController : ControllerBase
             .Select(x => x.Value)
             .FirstOrDefaultAsync();
 
+        var gstNumber = await _db.AppSettings
+            .Where(x => x.IsActive && x.Name == "GST Number")
+            .Select(x => x.Value)
+            .FirstOrDefaultAsync();
+
         return Ok(new
         {
             sale,
             patient,
             doctor,
-            header = header ?? ""
+            header = header ?? "",
+            gstNumber = gstNumber ?? ""
         });
     }
 

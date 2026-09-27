@@ -17,6 +17,7 @@ const settingsOpen = ref(false);
 const masterOpen = ref(false);
 const staffOpen = ref(false);
 const expenseOpen = ref(false);
+const reportsOpen = ref(false);
 
 async function login() {
   err.value = '';
@@ -175,6 +176,7 @@ onMounted(async () => {
         <div v-show="labOpen" class="submenu">
           <router-link class="submenu-link" to="/lab/master">Add Lab Test Master</router-link>
           <router-link class="submenu-link" to="/lab/patient-tests">Add Test Patient</router-link>
+          <router-link class="submenu-link" to="/lab/cbc-analyzer">CBC Analyzer Results</router-link>
         </div>
       </div>
 
@@ -188,7 +190,6 @@ onMounted(async () => {
           <router-link class="submenu-link" to="/staff/designations">Designation Master</router-link>
           <router-link class="submenu-link" to="/staff/attendance">Attendance</router-link>
           <router-link class="submenu-link" to="/staff/salary">Salary / Payroll</router-link>
-          <router-link class="submenu-link" to="/staff/report">Staff Report</router-link>
         </div>
       </div>
 
@@ -202,11 +203,31 @@ onMounted(async () => {
           <router-link class="submenu-link" to="/expenses/lab">Lab Expense</router-link>
           <router-link class="submenu-link" to="/expenses/pharmacy">Pharmacy Expense</router-link>
           <router-link class="submenu-link" to="/expenses/doctor-settlements">Doctor Settlement</router-link>
-          <router-link class="submenu-link" to="/expenses/report">Expense Report</router-link>
         </div>
       </div>
 
-      <router-link v-if="show('REPORTING')" to="/reporting">Reporting</router-link>
+      <div
+        v-if="
+          show('REPORTING') ||
+          show('LAB') ||
+          show('PHARMACY') ||
+          show('STAFF') ||
+          show('EXPENSE')
+        "
+        class="menu-group collapsible-menu"
+      >
+        <button type="button" class="menu-collapse-button" @click="reportsOpen = !reportsOpen">
+          <span>Reports</span>
+          <span>{{ reportsOpen ? '▾' : '▸' }}</span>
+        </button>
+        <div v-show="reportsOpen" class="submenu">
+          <router-link v-if="show('REPORTING')" class="submenu-link" to="/reporting">Reporting</router-link>
+          <router-link v-if="show('LAB')" class="submenu-link" to="/lab/report">Lab Report</router-link>
+          <router-link v-if="show('PHARMACY')" class="submenu-link" to="/pharmacy/report">Pharmacy Report</router-link>
+          <router-link v-if="show('STAFF')" class="submenu-link" to="/staff/report">Staff Report</router-link>
+          <router-link v-if="show('EXPENSE')" class="submenu-link" to="/expenses/report">Expense Report</router-link>
+        </div>
+      </div>
 
       <div
         v-if="

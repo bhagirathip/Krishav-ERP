@@ -73,6 +73,7 @@ builder.Services
 builder.Services.AddAuthorization();
 builder.Services.AddScoped<FollowUpService>();
 builder.Services.AddScoped<KrishavERP.Api.Services.DiscountService>();
+builder.Services.AddHostedService<KrishavERP.Api.Services.CbcAnalyzerListenerService>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 

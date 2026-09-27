@@ -248,6 +248,11 @@ public class OpdVisit
         get;
         set;
     }
+    public int? Pulse
+    {
+        get;
+        set;
+    }
     public string? ChiefComplaint
     {
         get;
@@ -1510,4 +1515,69 @@ public class LabPurchaseExpense
     public string? Notes { get; set; }
     public int? PaidByStaffId { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+// One row per OBR (test panel) received from a CBC analyzer over the BM500
+// LIS protocol - a single HL7 message can carry more than one OBR (e.g. an
+// automated count plus a manual/microscopic count), so these are split out
+// rather than one row per message. Separate from the existing LabOrder/
+// LabOrderTest/LabResult tables used by the manually-entered Lab module -
+// this is analyzer-pushed data, kept independent so it can't affect them.
+public class CbcAnalyzerResult
+{
+    public int Id { get; set; }
+    public string MessageControlId { get; set; } = "";
+    // "P" (patient sample) or "Q" (QC), from MSH-11.
+    public string ProcessingId { get; set; } = "P";
+    public string SampleId { get; set; } = "";
+    public string ResultTypeCode { get; set; } = "";
+    public string ResultTypeName { get; set; } = "";
+    public string PatientIdentifier { get; set; } = "";
+    public string PatientName { get; set; } = "";
+    public string? Gender { get; set; }
+    public string? AgeText { get; set; }
+    public string? PatientClass { get; set; }
+    public string? PatientLocation { get; set; }
+    public string? Tester { get; set; }
+    public string? Interpreter { get; set; }
+    public DateTime? RequestedAtUtc { get; set; }
+    public DateTime? ObservationAtUtc { get; set; }
+    public DateTime? SpecimenReceivedAtUtc { get; set; }
+    public string? LoadingMode { get; set; }
+    public string? BloodMode { get; set; }
+    public string? TestMode { get; set; }
+    public string? RefGroup { get; set; }
+    public string? Remark { get; set; }
+    public string RawMessage { get; set; } = "";
+    public DateTime ReceivedAtUtc { get; set; } = DateTime.UtcNow;
+
+    // Reserved for manually linking an analyzer-pushed result to an existing
+    // LabOrderTest - not wired up yet, kept nullable so this module can ship
+    // without touching the existing Lab order/result flow at all.
+    public int? LabOrderTestId { get; set; }
+
+    public List<CbcAnalyzerResultItem> Items { get; set; } = new();
+    public List<CbcAnalyzerImage> Images { get; set; } = new();
+}
+
+public class CbcAnalyzerResultItem
+{
+    public int Id { get; set; }
+    public int CbcAnalyzerResultId { get; set; }
+    public string Code { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string? Value { get; set; }
+    public string? Unit { get; set; }
+    public string? ReferenceRange { get; set; }
+    public string? AbnormalFlag { get; set; }
+    public int SortOrder { get; set; }
+}
+
+public class CbcAnalyzerImage
+{
+    public int Id { get; set; }
+    public int CbcAnalyzerResultId { get; set; }
+    public string Name { get; set; } = "";
+    public string ImagePath { get; set; } = "";
+    public int SortOrder { get; set; }
 }

@@ -82,6 +82,11 @@ public class PatientCreateRequest
         get;
         set;
     }
+    public int? Pulse
+    {
+        get;
+        set;
+    }
     public string? ChiefComplaint
     {
         get;
@@ -150,6 +155,11 @@ public class OpdCreateRequest
         set;
     }
     public decimal? TemperatureC
+    {
+        get;
+        set;
+    }
+    public int? Pulse
     {
         get;
         set;
@@ -791,6 +801,18 @@ public class LabPurchaseExpenseRequest
 public class DoctorSettlementPaymentRequest
 {
     public decimal PaidAmount { get; set; }
+    public DateTime? PaymentDate { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? ReferenceNumber { get; set; }
+    public int? PaidByStaffId { get; set; }
+    public string? Notes { get; set; }
+}
+
+public class DoctorSettlementBulkPaymentRequest
+{
+    public int DoctorId { get; set; }
+    public DateTime From { get; set; }
+    public DateTime To { get; set; }
     public DateTime? PaymentDate { get; set; }
     public string? PaymentMode { get; set; }
     public string? ReferenceNumber { get; set; }

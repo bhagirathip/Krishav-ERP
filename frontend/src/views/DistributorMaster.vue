@@ -81,7 +81,7 @@ onMounted(load);
       <th class="sortable" @click="sortBy('gstNumber')">GST <span class="sort-indicator">{{sortIndicator('gstNumber')}}</span></th>
       <th class="sortable" @click="sortBy('pan')">PAN <span class="sort-indicator">{{sortIndicator('pan')}}</span></th>
       <th class="sortable" @click="sortBy('drugsBazaarId')">DrugsBazaar ID <span class="sort-indicator">{{sortIndicator('drugsBazaarId')}}</span></th>
-      <th class="sortable" @click="sortBy('fssai')">FSSAI <span class="sort-indicator">{{sortIndicator('fssai')}}</span></th>
+      <th class="sortable" @click="sortBy('fssai')">DL No <span class="sort-indicator">{{sortIndicator('fssai')}}</span></th>
       <th class="sortable" @click="sortBy('address')">Address <span class="sort-indicator">{{sortIndicator('address')}}</span></th>
       <th></th>
     </tr>
@@ -120,7 +120,7 @@ onMounted(load);
         <label>GST Number<input v-model="form.gstNumber"></label>
         <label>PAN<input v-model="form.pan"></label>
         <label>DrugsBazaar ID<input v-model="form.drugsBazaarId"></label>
-        <label>FSSAI<input v-model="form.fssai"></label>
+        <label>DL No<input v-model="form.fssai"></label>
         <label class="full">Address<textarea rows="4" v-model="form.address"></textarea></label>
       </div>
 

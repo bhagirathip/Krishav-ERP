@@ -52,6 +52,7 @@ const form = ref({
   visitDateUtc: nowLocal(),
   bloodPressure: '',
   temperatureC: null,
+  pulse: null,
   weightKg: null,
   heightCm: null,
   spo2: null,
@@ -141,6 +142,7 @@ function add() {
     visitDateUtc: nowLocal(),
     bloodPressure: '',
     temperatureC: null,
+    pulse: null,
     weightKg: null,
     heightCm: null,
     spo2: null,
@@ -180,6 +182,7 @@ function validate() {
   if (form.value.weightKg != null && (form.value.weightKg < 1 || form.value.weightKg > 500)) list.push('Weight must be 1–500 kg.');
   if (form.value.heightCm != null && (form.value.heightCm < 30 || form.value.heightCm > 250)) list.push('Height must be 30–250 cm.');
   if (form.value.spo2 != null && (form.value.spo2 < 50 || form.value.spo2 > 100)) list.push('SpO₂ must be 50–100%.');
+  if (form.value.pulse != null && (form.value.pulse < 30 || form.value.pulse > 250)) list.push('Pulse must be 30–250 bpm.');
 
   errors.value = list;
   return list.length === 0;
@@ -268,6 +271,7 @@ async function printPrescription(row) {
   const vitals = [
     printableVital('BP', data.visit?.bloodPressure),
     printableVital('Temperature', data.visit?.temperatureC, ' °F'),
+    printableVital('Pulse', data.visit?.pulse, ' bpm'),
     printableVital('Weight', data.visit?.weightKg, ' kg'),
     printableVital('Height', data.visit?.heightCm, ' cm'),
     printableVital('SpO₂', data.visit?.spo2, '%')
@@ -464,6 +468,7 @@ onMounted(async () => {
 
         <label>BP<input v-model="form.bloodPressure" placeholder="120/80"></label>
         <label>Temperature °F<input v-model.number="form.temperatureC" type="number" step="0.1"></label>
+        <label>Pulse (bpm)<input v-model.number="form.pulse" type="number" min="30" max="250"></label>
         <label>Weight kg<input v-model.number="form.weightKg" type="number" step="0.1"></label>
         <label>Height cm<input v-model.number="form.heightCm" type="number" step="0.1"></label>
         <label>SpO₂ %<input v-model.number="form.spo2" type="number"></label>

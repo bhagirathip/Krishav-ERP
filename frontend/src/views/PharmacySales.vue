@@ -216,15 +216,55 @@ async function saleData(row) {
 
 async function printSale(row) {
   const data = await saleData(row);
-  const itemRows = data.sale.items.map(item => `
-    <tr><td>${item.productName}</td><td>${item.batchNo}</td><td>${item.unitType}</td><td>${item.quantity}</td><td>₹${Number(item.unitPrice).toFixed(2)}</td><td>₹${Number(item.discountAmount).toFixed(2)}</td><td>₹${Number(item.totalAmount).toFixed(2)}</td></tr>
+  const itemRows = data.sale.items.map((item, index) => `
+    <tr>
+      <td class="no-col">${index + 1}</td>
+      <td>${item.productName}</td>
+      <td>${item.batchNo}</td>
+      <td class="no-col">${item.quantity}</td>
+      <td class="amount">₹${(Number(item.unitPrice) * Number(item.quantity)).toFixed(2)}</td>
+      <td class="amount">₹${Number(item.discountAmount).toFixed(2)}</td>
+      <td class="amount">₹${Number(item.totalAmount).toFixed(2)}</td>
+    </tr>
   `).join('');
+  const saleDate = data.sale.saleDateUtc ? new Date(data.sale.saleDateUtc).toLocaleDateString() : '-';
   const frame = document.createElement('iframe');
   frame.style.cssText = 'position:fixed;width:0;height:0;border:0';
   document.body.appendChild(frame);
   const doc = frame.contentWindow.document;
   doc.open();
-  doc.write(`<!doctype html><html><head><title></title><style>@page{size:A4;margin:0}body{margin:0;font-family:Arial}.header img{width:100%;max-height:150px;object-fit:fill}.content{padding:12mm}.patient{border:1px solid #222;padding:9px;margin-bottom:12px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:7px}.total{width:340px;margin:16px 0 0 auto}</style></head><body><div class="header">${data.header ? `<img src="${assetUrl(data.header)}">` : ''}</div><div class="content"><div class="patient"><b>Patient:</b> ${data.patient?.name || data.sale.walkInPatientName || 'Walk-in'} &nbsp; <b>Phone:</b> ${data.patient?.phone || data.sale.walkInPhone || '-'}<br><b>Doctor:</b> ${data.doctor?.name || data.sale.outsideDoctorName || '-'} &nbsp; <b>Payment:</b> ${data.sale.paymentMode}</div><table><tr><th>Product</th><th>Batch</th><th>Unit</th><th>Qty</th><th>Price</th><th>Discount</th><th>Total</th></tr>${itemRows}</table><div class="total"><b>Total: ₹${Number(data.sale.totalAmount).toFixed(2)}</b></div></div><script>window.onload=()=>window.print();window.onafterprint=()=>window.parent.postMessage('pharmacy-print-complete','*');<\/script></body></html>`);
+  // Half-A4 (A5) to save paper. Patient-info strip and item table use only
+  // top/bottom rules (no side/cell borders), matching the lab report style.
+  doc.write(`<!doctype html><html><head><title></title><style>
+    @page{size:A5;margin:0}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Arial;font-size:11px}
+    .header img{width:100%;max-height:90px;object-fit:fill;display:block}
+    .content{padding:3mm 6mm 6mm}
+    .patient{border-top:1.5px solid #222;border-bottom:1.5px solid #222;padding:4px 0;margin-bottom:10px}
+    .patient-row{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;padding:1.5px 0}
+    table{width:100%;border-collapse:collapse}
+    thead th{border-top:1.5px solid #222;border-bottom:1.5px solid #222;padding:5px 4px;text-align:left}
+    tbody td{padding:4px;border:0}
+    .no-col{width:9mm;text-align:center}
+    .amount{text-align:right}
+    .total{border-top:1.5px solid #222;margin-top:6px;padding-top:6px;text-align:right;font-size:13px}
+  </style></head><body>
+    <div class="header">${data.header ? `<img src="${assetUrl(data.header)}">` : ''}</div>
+    <div class="content">
+      <div class="patient">
+        <div class="patient-row"><span><b>Patient:</b> ${data.patient?.name || data.sale.walkInPatientName || 'Walk-in'}</span><span><b>Phone:</b> ${data.patient?.phone || data.sale.walkInPhone || '-'}</span></div>
+        <div class="patient-row"><span><b>Doctor:</b> ${data.doctor?.name || data.sale.outsideDoctorName || '-'}</span><span><b>GST No:</b> ${data.gstNumber || '-'}</span></div>
+        <div class="patient-row"><span><b>Payment:</b> ${data.sale.paymentMode}</span><span><b>Date:</b> ${saleDate}</span></div>
+      </div>
+      <table>
+        <thead><tr><th class="no-col">Sl</th><th>Product</th><th>Batch No</th><th class="no-col">Qty</th><th class="amount">Amount</th><th class="amount">Discount</th><th class="amount">Total</th></tr></thead>
+        <tbody>${itemRows}</tbody>
+      </table>
+      <div class="total"><b>Total: ₹${Number(data.sale.totalAmount).toFixed(2)}</b></div>
+    </div>
+    <script>window.onload=()=>window.print();window.onafterprint=()=>window.parent.postMessage('pharmacy-print-complete','*');<\/script>
+  </body></html>`);
   doc.close();
   const listener = event => {
     if (event.data === 'pharmacy-print-complete') {

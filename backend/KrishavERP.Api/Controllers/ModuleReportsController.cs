@@ -120,13 +120,11 @@ public class ModuleReportsController : ControllerBase
             .Where(x => x.CreatedAtUtc >= start && x.CreatedAtUtc < end)
             .CountAsync();
 
-        var billIds = await _db.LabOrders
-            .Where(x => x.CreatedAtUtc >= start && x.CreatedAtUtc < end && x.BillId != null)
-            .Select(x => x.BillId!.Value)
-            .ToListAsync();
-
+        // Billing date (not order-creation date) drives revenue, so a
+        // backdated bill is attributed to the period it was actually billed
+        // for, matching ReportingController's convention.
         var income = await _db.Bills
-            .Where(x => billIds.Contains(x.Id))
+            .Where(x => x.Status != "Deleted" && x.BillType == "Lab" && x.BillDate >= start && x.BillDate < end)
             .SumAsync(x => (decimal?)x.NetAmount) ?? 0;
 
         var purchases = await _db.LabPurchaseExpenses
@@ -140,7 +138,7 @@ public class ModuleReportsController : ControllerBase
         var yearStart = new DateTime(selectedYear, 1, 1);
         var yearEnd = yearStart.AddYears(1);
         var bills = await _db.Bills
-            .Where(x => x.Status != "Deleted" && x.BillType == "Lab" && x.CreatedAtUtc >= yearStart && x.CreatedAtUtc < yearEnd)
+            .Where(x => x.Status != "Deleted" && x.BillType == "Lab" && x.BillDate >= yearStart && x.BillDate < yearEnd)
             .ToListAsync();
         var labPurchases = await _db.LabPurchaseExpenses
             .Where(x => x.ExpenseDate >= yearStart && x.ExpenseDate < yearEnd)
@@ -150,7 +148,7 @@ public class ModuleReportsController : ControllerBase
         decimal previous = 0;
         for (var month = 1; month <= 12; month++)
         {
-            var revenue = bills.Where(x => x.CreatedAtUtc.Month == month).Sum(x => x.NetAmount);
+            var revenue = bills.Where(x => x.BillDate.Month == month).Sum(x => x.NetAmount);
             var expense = labPurchases.Where(x => x.ExpenseDate.Month == month).Sum(x => x.Amount);
             monthly.Add(new
             {

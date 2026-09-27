@@ -49,6 +49,7 @@ const blank = {
   visitDateUtc: null,
   bloodPressure: '',
   temperatureC: null,
+  pulse: null,
   weightKg: null,
   heightCm: null,
   spo2: null,
@@ -91,6 +92,7 @@ const opdBillForm = ref({
   visitDateUtc: localDateTime(),
   bloodPressure: '',
   temperatureC: null,
+  pulse: null,
   weightKg: null,
   heightCm: null,
   spo2: null,
@@ -180,6 +182,7 @@ function edit(patient) {
     doctorId: patient.doctorId,
     bloodPressure: patient.bloodPressure || '',
     temperatureC: patient.temperatureC,
+    pulse: patient.pulse,
     weightKg: patient.weightKg,
     heightCm: patient.heightCm,
     spo2: patient.spo2,
@@ -207,6 +210,7 @@ function validate() {
   if (form.value.heightCm != null && (form.value.heightCm < 30 || form.value.heightCm > 250)) list.push('Height must be between 30 and 250 cm.');
   if (form.value.weightKg != null && (form.value.weightKg < 1 || form.value.weightKg > 500)) list.push('Weight must be between 1 and 500 kg.');
   if (form.value.spo2 != null && (form.value.spo2 < 50 || form.value.spo2 > 100)) list.push('SpO₂ must be between 50 and 100%.');
+  if (form.value.pulse != null && (form.value.pulse < 30 || form.value.pulse > 250)) list.push('Pulse must be between 30 and 250 bpm.');
 
   errors.value = list;
   return list.length === 0;
@@ -335,6 +339,7 @@ function openOpdBill(patient) {
     visitDateUtc: localDateTime(),
     bloodPressure: patient.bloodPressure || '',
     temperatureC: patient.temperatureC,
+    pulse: patient.pulse,
     weightKg: patient.weightKg,
     heightCm: patient.heightCm,
     spo2: patient.spo2,
@@ -540,6 +545,7 @@ onMounted(load);
 
         <label>BP<input v-model="form.bloodPressure" placeholder="120/80"></label>
         <label>Temperature °F<input v-model.number="form.temperatureC" type="number" step="0.1"></label>
+        <label>Pulse (bpm)<input v-model.number="form.pulse" type="number" min="30" max="250"></label>
         <label>Weight (kg)<input v-model.number="form.weightKg" type="number" min="1" max="500" step="0.1"></label>
         <label>Height (cm)<input v-model.number="form.heightCm" type="number" min="30" max="250" step="0.1"></label>
         <label>SpO₂ (%)<input v-model.number="form.spo2" type="number" min="50" max="100"></label>
@@ -696,6 +702,11 @@ onMounted(load);
         <label>
           Temperature °F
           <input type="number" step="0.1" v-model.number="opdBillForm.temperatureC">
+        </label>
+
+        <label>
+          Pulse (bpm)
+          <input type="number" min="30" max="250" v-model.number="opdBillForm.pulse">
         </label>
 
         <label>
