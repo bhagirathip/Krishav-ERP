@@ -69,7 +69,7 @@ onMounted(load);
   <h1>Distributor Master</h1>
 
   <div class="toolbar">
-    <button v-if="can('PHARMACY', 'add')" @click="add">+ Add Distributor</button>
+    <button v-if="can('PHARMACY_DISTRIBUTOR', 'add')" @click="add">+ Add Distributor</button>
   </div>
 
   <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all distributor fields..." /></div>
@@ -95,8 +95,8 @@ onMounted(load);
       <td>{{ row.fssai || '-' }}</td>
       <td>{{ row.address || '-' }}</td>
       <td class="actions">
-        <button v-if="can('PHARMACY', 'edit')" @click="edit(row)">Edit</button>
-        <button v-if="can('PHARMACY', 'delete')" class="danger-btn" @click="remove(row)">Delete</button>
+        <button v-if="can('PHARMACY_DISTRIBUTOR', 'edit')" @click="edit(row)">Edit</button>
+        <button v-if="can('PHARMACY_DISTRIBUTOR', 'delete')" class="danger-btn" @click="remove(row)">Delete</button>
       </td>
     </tr>
   </table>

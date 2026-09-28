@@ -376,7 +376,7 @@ onMounted(async () => {
     <div class="toolbar"><input style="max-width:520px" v-model="billSearch" placeholder="Search product, MF, invoice, type, batch or HSN"></div>
     <table class="table">
       <tr><th class="sortable" @click="sortBillSearch('medicineType')">Type <span class="sort-indicator">{{billSortIndicator('medicineType')}}</span></th><th class="sortable" @click="sortBillSearch('productName')">Product <span class="sort-indicator">{{billSortIndicator('productName')}}</span></th><th class="sortable" @click="sortBillSearch('manufacturer')">MF <span class="sort-indicator">{{billSortIndicator('manufacturer')}}</span></th><th class="sortable" @click="sortBillSearch('batchNo')">Batch <span class="sort-indicator">{{billSortIndicator('batchNo')}}</span></th><th class="sortable" @click="sortBillSearch('mrp')">MRP <span class="sort-indicator">{{billSortIndicator('mrp')}}</span></th><th>Stock</th><th></th></tr>
-      <tr v-for="row in pagedBillSearch" :key="row.id"><td>{{ row.medicineType }}</td><td>{{ row.productName }}</td><td>{{ row.manufacturer }}</td><td>{{ row.batchNo }}</td><td>₹{{ Number(row.mrp).toFixed(2) }}</td><td>{{ row.availablePacks }} pack(s) + {{ row.looseUnits }} loose</td><td><button v-if="can('PHARMACY','add')" @click="addToCart(row)">Add to Bill</button></td></tr>
+      <tr v-for="row in pagedBillSearch" :key="row.id"><td>{{ row.medicineType }}</td><td>{{ row.productName }}</td><td>{{ row.manufacturer }}</td><td>{{ row.batchNo }}</td><td>₹{{ Number(row.mrp).toFixed(2) }}</td><td>{{ row.availablePacks }} pack(s) + {{ row.looseUnits }} loose</td><td><button v-if="can('PHARMACY_SALES','add')" @click="addToCart(row)">Add to Bill</button></td></tr>
     </table>
     <Pagination :page="billSearchPage" :page-count="billSearchPageCount" :total="sortedBillSearch.length" :page-size="pageSize" @update:page="billSearchPage=$event" />
 
@@ -394,7 +394,7 @@ onMounted(async () => {
     </table>
 
     <div class="bill-total-box"><div><span>Before Discount</span><b>₹{{ totals.gross.toFixed(2) }}</b></div><div><span>Discount</span><b>₹{{ totals.discount.toFixed(2) }}</b></div><div class="grand"><span>Total</span><b>₹{{ totals.net.toFixed(2) }}</b></div></div>
-    <div class="modal-actions"><button v-if="can('PHARMACY','add')" @click="createSale">Complete Sale</button></div>
+    <div class="modal-actions"><button v-if="can('PHARMACY_SALES','add')" @click="createSale">Complete Sale</button></div>
   </div>
 
   <div v-if="activeTab==='summary'" class="card">

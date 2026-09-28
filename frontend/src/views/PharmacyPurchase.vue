@@ -316,7 +316,7 @@ onMounted(load);
   <h1>Pharmacy Purchase</h1>
 
   <div class="toolbar">
-    <button v-if="can('PHARMACY', 'add')" @click="addInvoice">+ Add Purchase Invoice</button>
+    <button v-if="can('PHARMACY_PURCHASE', 'add')" @click="addInvoice">+ Add Purchase Invoice</button>
     <button class="secondary" @click="newType">Medicine Type Master</button>
   </div>
   <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all purchase invoice fields..." /></div>
@@ -347,8 +347,8 @@ onMounted(load);
       <td>{{ Number(row.roundOffAmount || 0) >= 0 ? '+' : '' }}₹{{ Number(row.roundOffAmount || 0).toFixed(2) }}</td>
       <td><b>₹{{ Number(row.totalAmount).toFixed(2) }}</b></td>
       <td class="actions">
-        <button v-if="can('PHARMACY','edit')" @click="editInvoice(row)">Edit</button>
-        <button v-if="can('PHARMACY','delete')" class="danger-btn" @click="deleteInvoice(row)">Delete</button>
+        <button v-if="can('PHARMACY_PURCHASE','edit')" @click="editInvoice(row)">Edit</button>
+        <button v-if="can('PHARMACY_PURCHASE','delete')" class="danger-btn" @click="deleteInvoice(row)">Delete</button>
       </td>
     </tr>
   </table>

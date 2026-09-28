@@ -11,6 +11,7 @@ const pageSize = 10;
 const showModal = ref(false);
 const errors = ref([]);
 const master = ref(emptyMaster());
+const noteArea = ref(null);
 
 function uid(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
@@ -101,6 +102,25 @@ function deleteColumn(index) {
   master.value.rows.forEach(row => delete row.values[column.id]);
 }
 
+// Toggles ** around the selected text in the Note field - the same manual
+// bold marker the lab print already understands for test names, results and
+// notes, so this button is just a shortcut for typing ** yourself.
+function wrapNoteBold() {
+  const el = noteArea.value;
+  if (!el) return;
+  const start = el.selectionStart, end = el.selectionEnd;
+  if (start === end) { alert('Select the text you want to bold first.'); return; }
+  const value = master.value.note || '';
+  const selected = value.slice(start, end);
+  const alreadyBold = selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4;
+  const replacement = alreadyBold ? selected.slice(2, -2) : `**${selected}**`;
+  master.value.note = value.slice(0, start) + replacement + value.slice(end);
+  requestAnimationFrame(() => {
+    el.focus();
+    el.setSelectionRange(start, start + replacement.length);
+  });
+}
+
 function addRow() {
   master.value.rows.push({ id: uid('r'), values: {} });
 }
@@ -177,7 +197,7 @@ onMounted(load);
 <template>
   <h1>Lab Test Master</h1>
   <div class="toolbar">
-    <button v-if="can('LAB','add')" @click="newMaster">+ Add Lab Test Master</button>
+    <button v-if="can('LAB_MASTER','add')" @click="newMaster">+ Add Lab Test Master</button>
   </div>
   <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all lab master fields..." /></div>
 
@@ -189,8 +209,8 @@ onMounted(load);
       <td>{{summary(test)}}</td>
       <td>{{test.note || '-'}}</td>
       <td class="actions">
-        <button v-if="can('LAB','edit')" @click="editMaster(test)">Edit</button>
-        <button v-if="can('LAB','delete')" class="danger-btn" @click="remove(test)">Delete</button>
+        <button v-if="can('LAB_MASTER','edit')" @click="editMaster(test)">Edit</button>
+        <button v-if="can('LAB_MASTER','delete')" class="danger-btn" @click="remove(test)">Delete</button>
       </td>
     </tr>
   </table>
@@ -237,7 +257,7 @@ onMounted(load);
             <tr v-for="(row,rowIndex) in master.rows" :key="row.id">
               <td>{{rowIndex+1}}</td>
               <td v-for="column in master.columns" :key="column.id">
-                <input v-model="row.values[column.id]" :placeholder="column.name">
+                <textarea rows="2" class="lab-master-cell" v-model="row.values[column.id]" :placeholder="column.name"></textarea>
               </td>
               <td><button class="danger-btn" @click="deleteRow(rowIndex)">Delete Row</button></td>
             </tr>
@@ -245,7 +265,12 @@ onMounted(load);
         </table>
       </div>
 
-      <label style="display:block;margin-top:18px">Note<textarea rows="4" v-model="master.note"></textarea></label>
+      <label style="display:block;margin-top:18px">
+        Note
+        <button type="button" class="secondary compact-button" style="margin-left:8px" @click="wrapNoteBold" title="Wrap the selected text in ** so it prints bold">B</button>
+        <span class="muted" style="margin-left:8px">Select text and click B, or type **like this** yourself, to bold it on print.</span>
+        <textarea ref="noteArea" rows="4" v-model="master.note"></textarea>
+      </label>
       <div class="modal-actions">
         <button @click="save">Save Test Master</button>
         <button class="secondary" @click="showModal=false">Cancel</button>

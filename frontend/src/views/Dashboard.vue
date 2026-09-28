@@ -9,11 +9,11 @@ async function load(){const r=await api.get('/dashboard',{params:{from:from.valu
 <div v-if="can('OPD','view')" class="card metric-card"><div class="muted">Emergency(es)</div><div class="metric">{{d.emergencyCount??0}}</div></div>
 <div v-if="!d.isMultiDay && can('IPD','view')" class="card metric-card"><div class="muted">Currently Admitted</div><div class="metric">{{d.currentlyAdmitted??0}}</div></div>
 <div v-if="!d.isMultiDay && can('BED','view')" class="card metric-card"><div class="muted">Beds</div><div class="metric">{{d.beds?.occupied??0}} / {{d.beds?.total??18}}</div><div class="muted">Occupied / Total · {{d.beds?.available??18}} available</div></div>
-<div v-if="can('LAB','view')" class="card metric-card"><div class="muted">Number of Lab Tests</div><div class="metric">{{d.numberOfLabTests??0}}</div></div>
+<div v-if="can('LAB_PATIENT_TESTS','view')" class="card metric-card"><div class="muted">Number of Lab Tests</div><div class="metric">{{d.numberOfLabTests??0}}</div></div>
 <div v-if="can('BILL','view')" class="card metric-card money"><div class="muted">Total Unpaid Amount</div><div class="metric">₹{{Number(d.totalUnpaidAmount??0).toFixed(2)}}</div></div>
 <div v-if="can('BILL','view')" class="card metric-card money"><div class="muted">Total Paid Amount</div><div class="metric">₹{{Number(d.totalPaidAmount??0).toFixed(2)}}</div></div>
-<div v-if="can('LAB','view')" class="card metric-card money"><div class="muted">Total Lab Amount</div><div class="metric">₹{{Number(d.totalLabAmount??0).toFixed(2)}}</div></div>
-<div v-if="can('PHARMACY','view')" class="card metric-card money"><div class="muted">Total Pharmacy Amount</div><div class="metric">₹{{Number(d.totalPharmacyAmount??0).toFixed(2)}}</div></div>
+<div v-if="can('LAB_PATIENT_TESTS','view')" class="card metric-card money"><div class="muted">Total Lab Amount</div><div class="metric">₹{{Number(d.totalLabAmount??0).toFixed(2)}}</div></div>
+<div v-if="can('PHARMACY_SALES','view')" class="card metric-card money"><div class="muted">Total Pharmacy Amount</div><div class="metric">₹{{Number(d.totalPharmacyAmount??0).toFixed(2)}}</div></div>
 <div v-if="can('OPD','view')" class="card metric-card money"><div class="muted">Total OPD Amount</div><div class="metric">₹{{Number(d.totalOpdAmount??0).toFixed(2)}}</div></div>
 <div v-if="can('OPD','view')" class="card metric-card money"><div class="muted">Doctor Consultation (Settled Separately)</div><div class="metric">₹{{Number(d.doctorConsultationAmount??0).toFixed(2)}}</div></div>
 </div></div></template>

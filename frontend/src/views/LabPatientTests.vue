@@ -68,10 +68,53 @@ function findValueColumnId(columns){
   return col?col.id:null;
 }
 
+function findRangeColumnId(columns){
+  const col=columns.find(c=>(c.name||'').trim().toLowerCase().includes('range'));
+  return col?col.id:null;
+}
+
+// Reference ranges come in the "low-high", "<high" or ">low" forms (same
+// convention as the BM500 analyzer's OBX-7 field), so this checks a numeric
+// result against whichever form is present. Non-numeric results or ranges
+// (qualitative tests, blank cells) are left alone rather than guessed at.
+function isResultOutOfRange(value,range){
+  const numeric=parseFloat(String(value??'').trim());
+  const text=String(range??'').trim();
+  if(!text||Number.isNaN(numeric))return false;
+
+  if(text.startsWith('<')){
+    const upper=parseFloat(text.slice(1));
+    return !Number.isNaN(upper)&&numeric>=upper;
+  }
+  if(text.startsWith('>')){
+    const lower=parseFloat(text.slice(1));
+    return !Number.isNaN(lower)&&numeric<=lower;
+  }
+
+  const parts=text.split('-').map(s=>s.trim()).filter(Boolean);
+  if(parts.length===2){
+    const low=parseFloat(parts[0]),high=parseFloat(parts[1]);
+    if(!Number.isNaN(low)&&!Number.isNaN(high))return numeric<low||numeric>high;
+  }
+  return false;
+}
+
+function isMethodColumnName(name){
+  return (name||'').trim().toLowerCase().includes('method');
+}
+
+// Lets a technician manually bold part of a value by wrapping it in **like
+// this**, the same convention used for the Note field's Bold button - applied
+// everywhere test/result text is printed, not just the Note row.
+function renderWithBold(value){
+  return escapeHtml(value).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+}
+
 // One shared result table for one or more tests: the column header row (No.,
 // Investigation, Unit, Range, ...) is printed once, then each test contributes
 // a name row followed by its own parameter rows - instead of a separate table
-// with its own header per test.
+// with its own header per test. The Sl. No. column counts continuously across
+// every test in the merged print, rather than restarting at 1 for each test.
 function buildMergedTestsHtml(results){
   const canonicalCols=[];
   const seen=new Set();
@@ -83,26 +126,47 @@ function buildMergedTestsHtml(results){
     });
   });
 
-  const headerHtml=`<th class="no-col">No.</th>${canonicalCols.map(name=>`<th>${escapeHtml(name)}</th>`).join('')}`;
+  // A Method column (when present) isn't printed as its own table column -
+  // it's shown as a smaller sub-line under the Investigation column instead.
+  const displayCols=canonicalCols.filter(name=>!isMethodColumnName(name));
+  const investigationName=displayCols.find(name=>name.trim().toLowerCase().includes('investigation'))||displayCols[0];
 
+  const headerHtml=`<th class="no-col">No.</th>${displayCols.map(name=>`<th>${escapeHtml(name)}</th>`).join('')}`;
+
+  let rowCounter=0;
   const bodyHtml=results.map(data=>{
     const schema=data.resultSchema||{};
     const columns=Array.isArray(schema.columns)?schema.columns:[];
     const nameToId={};
     columns.forEach(c=>{nameToId[c.name||'']=c.id});
     const valueColumnId=findValueColumnId(columns);
+    const rangeColumnId=findRangeColumnId(columns);
+    const methodName=canonicalCols.find(name=>isMethodColumnName(name)&&nameToId[name]);
     // Skip parameters that have no result entered yet.
     const rows=(Array.isArray(schema.rows)?schema.rows:[])
       .filter(row=>valueColumnId
         ? String(row.values?.[valueColumnId]??'').trim()!==''
         : columns.some(c=>String(row.values?.[c.id]??'').trim()!==''));
 
-    const nameRowHtml=`<tr class="test-name-row"><td class="no-col"></td><td colspan="${Math.max(1,canonicalCols.length)}">${escapeHtml(data.test?.name||'')}</td></tr>`;
+    const nameRowHtml=`<tr class="test-name-row"><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}">${renderWithBold(data.test?.name||'')}</td></tr>`;
     const rowsHtml=rows.length
-      ? rows.map((row,index)=>`<tr><td class="no-col">${index+1}</td>${canonicalCols.map(name=>`<td>${escapeHtml(row.values?.[nameToId[name]]??'')}</td>`).join('')}</tr>`).join('')
-      : `<tr><td class="no-col"></td><td colspan="${Math.max(1,canonicalCols.length)}" class="muted-cell">No results entered yet.</td></tr>`;
+      ? rows.map(row=>{
+          const outOfRange=valueColumnId&&rangeColumnId
+            &&isResultOutOfRange(row.values?.[valueColumnId],row.values?.[rangeColumnId]);
+          rowCounter++;
+          const methodValue=methodName?String(row.values?.[nameToId[methodName]]??'').trim():'';
+          const cells=displayCols.map(name=>{
+            const cellValue=row.values?.[nameToId[name]]??'';
+            const methodLine=(name===investigationName&&methodValue)
+              ?`<div class="method-line">${renderWithBold(methodValue)}</div>`
+              :'';
+            return `<td>${renderWithBold(cellValue)}${methodLine}</td>`;
+          }).join('');
+          return `<tr${outOfRange?' class="out-of-range"':''}><td class="no-col">${rowCounter}</td>${cells}</tr>`;
+        }).join('')
+      : `<tr><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}" class="muted-cell">No results entered yet.</td></tr>`;
     const noteHtml=data.test?.note
-      ? `<tr class="note-row"><td class="no-col"></td><td colspan="${Math.max(1,canonicalCols.length)}" class="note-cell">Note: ${escapeHtml(data.test.note)}</td></tr>`
+      ? `<tr class="note-row"><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}" class="note-cell">Note: ${renderWithBold(data.test.note)}</td></tr>`
       : '';
 
     return nameRowHtml+rowsHtml+noteHtml;
@@ -136,30 +200,31 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
         @page{size:A4;margin:10mm}
         *{box-sizing:border-box}
         html,body{margin:0;padding:0;font-family:"Times New Roman",serif;color:#111}
-        body{font-size:11.5px;counter-reset:page 1}
+        body{font-size:14.5px;counter-reset:page 1}
 
         table.page-frame{width:100%;border-collapse:collapse}
         .page-frame thead{display:table-header-group}
         .page-frame tfoot{display:table-footer-group}
-        .page-frame>thead>tr>td,.page-frame>tfoot>tr>td{padding:0}
+        .page-frame>thead>tr>td,.page-frame>tfoot>tr>td,.page-frame>tbody>tr>td{padding:0}
+        .page-frame>tbody>tr>td{vertical-align:top}
 
         /* Repeated laboratory stationery. */
         .lab-page-header img{display:block;width:100%;height:42mm;object-fit:fill}
 
-        .lab-page-footer{border-top:1px solid #222;padding:3mm 1mm 2mm;display:grid;grid-template-columns:1.35fr .9fr .55fr;column-gap:8mm;align-items:start;font-size:9px;line-height:1.35}
+        .lab-page-footer{border-top:1px solid #222;padding:3mm 1mm 2mm;display:grid;grid-template-columns:1.35fr .9fr .55fr;column-gap:8mm;align-items:start;font-size:12px;line-height:1.35}
         .footer-meta div{margin:0 0 1px}
         .footer-meta b{font-weight:400}
         .signature-block{text-align:right;align-self:start}
         .signature-block img{display:block;max-height:11mm;max-width:42mm;margin:0 auto -1mm}
         .signature-block .sig-label{margin-bottom:1px}
-        .signature-block .sig-name{font-weight:700;font-size:9.5px}
-        .signature-block .sig-qual{font-size:9px}
+        .signature-block .sig-name{font-weight:700;font-size:12.5px}
+        .signature-block .sig-qual{font-size:12px}
         .page-box{text-align:right;align-self:end;padding-bottom:1mm;white-space:nowrap}
         .page-box .page-number:after{content:counter(page)}
 
         /* Printed once, directly below the configured lab header. */
         .patient-info{border-top:1.5px solid #222;border-bottom:1.5px solid #222;margin:4mm 0;padding:2mm 1mm}
-        .pi-row{display:grid;grid-template-columns:1fr 1fr;gap:0 12mm;padding:1.1mm 0;font-size:10.5px}
+        .pi-row{display:grid;grid-template-columns:1fr 1fr;gap:0 12mm;padding:1.1mm 0;font-size:13.5px}
         .pi-row b{display:inline-block;min-width:27mm;font-weight:700}
 
         /* The column header (No./Investigation/Unit/Range/...) is printed once
@@ -167,13 +232,17 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
            first result row) followed by its own parameter rows. */
         table.result-table{width:100%;border-collapse:collapse;table-layout:auto}
         .result-table thead{display:table-header-group}
-        .result-table thead th{background:#91C2F7;color:#fff;padding:2.2mm 2mm;text-align:left;font-family:Arial,sans-serif;font-size:9.5px;font-weight:700;border:0}
-        .result-table tbody td{padding:1.25mm 2mm;text-align:left;vertical-align:top;word-break:break-word;font-size:10px;border:0}
+        .result-table thead th{background:#91C2F7;color:#fff;padding:2.2mm 2mm;text-align:left;font-family:Arial,sans-serif;font-size:12.5px;font-weight:700;border:0}
+        .result-table tbody td{padding:1.25mm 2mm;text-align:left;vertical-align:top;word-break:break-word;white-space:pre-line;font-size:13px;border:0}
         .result-table tbody tr{break-inside:avoid;page-break-inside:avoid}
-        .test-name-row td{font-weight:700;font-size:11px;padding-top:3mm;border-top:1px solid #ccc!important}
+        .result-table tbody tr.out-of-range td{font-weight:700}
+        /* No border between tests - a bigger, bolder name plus generous
+           top spacing is what tells two tests apart on the printed page. */
+        .test-name-row td{font-weight:700;font-size:17px;padding-top:7mm;border-top:0}
+        .method-line{font-size:11px;color:#333;font-style:italic;margin-top:0.6mm;white-space:pre-line}
         .no-col{width:10mm;text-align:center!important}
         .muted-cell{color:#777;font-style:italic}
-        .note-cell{color:#444;font-style:italic;font-size:9.5px}
+        .note-cell{color:#444;font-style:italic;font-size:12.5px;white-space:pre-line}
       </style>
     </head>
     <body>
@@ -215,7 +284,52 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
 
       <script>
         const waitForImages=()=>Promise.all(Array.from(document.images).map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=img.onerror=resolve})));
-        window.onload=async()=>{await waitForImages();setTimeout(()=>window.print(),100)};
+
+        // A table's rows never stretch to fill a page on their own, so a
+        // short report's footer would otherwise sit right under the last
+        // result instead of at the bottom of the page - and on a long report
+        // that spans several pages, the tail end of the last page has the
+        // same problem. Fixed by measuring the natural (unpaginated) height
+        // of the header/footer/content once the layout has settled, working
+        // out how much of the final page is still empty, and inserting one
+        // spacer of exactly that height at the end of the content so it
+        // flows onto that last page and pushes the footer down to the
+        // bottom - every earlier page is untouched and paginates normally.
+        function fillLastPageToFooter(){
+          const header=document.querySelector('.lab-page-header');
+          const footer=document.querySelector('.lab-page-footer');
+          const main=document.querySelector('main');
+          if(!header||!footer||!main)return;
+
+          const mmToPx=96/25.4;
+          // A small safety margin: the print engine's own pagination doesn't
+          // line up with this on-screen measurement to the sub-pixel, and
+          // filling all the way to the calculated edge risks rounding error
+          // spilling a sliver of content onto a spurious extra blank page -
+          // better to leave a few mm of slack above the footer than that.
+          const safetyPx=10*mmToPx;
+          const pageContentPx=277*mmToPx; // A4 height minus the 10mm @page margin on both edges
+          const headerPx=header.getBoundingClientRect().height;
+          const footerPx=footer.getBoundingClientRect().height;
+          const mainPx=main.getBoundingClientRect().height;
+          const perPageBodyPx=pageContentPx-headerPx-footerPx-safetyPx;
+          if(perPageBodyPx<=0)return;
+
+          const totalPages=Math.max(1,Math.ceil(mainPx/perPageBodyPx));
+          const usedOnLastPage=mainPx-(totalPages-1)*perPageBodyPx;
+          const fillerPx=perPageBodyPx-usedOnLastPage;
+          if(fillerPx>1){
+            const filler=document.createElement('div');
+            filler.style.height=fillerPx+'px';
+            main.appendChild(filler);
+          }
+        }
+
+        window.onload=async()=>{
+          await waitForImages();
+          fillLastPageToFooter();
+          setTimeout(()=>window.print(),100);
+        };
         window.onafterprint=()=>window.parent.postMessage('lab-print','*');
       <\/script>
     </body>
@@ -225,8 +339,15 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
 function openPrintFrame(html){
   const f=document.createElement('iframe');
   f.style.position='fixed';
-  f.style.width='0';
-  f.style.height='0';
+  f.style.left='-10000px';
+  f.style.top='0';
+  // Matches the printed page's content width (A4 minus the 10mm @page
+  // margins) rather than 0x0 - buildLabReportHtml's inline script measures
+  // real element heights before printing (to size the last page's footer
+  // spacer), and that only lines up with what actually gets printed if the
+  // frame it's measuring wraps text at the same width print will use.
+  f.style.width='190mm';
+  f.style.height='10000px';
   f.style.border='0';
   document.body.appendChild(f);
 
@@ -317,7 +438,7 @@ onMounted(load)
 
 <template>
 <h1>Patient Lab Tests</h1>
-<div class="toolbar"><button v-if="can('LAB','add')" @click="newOrder">+ Add Test Patient</button></div>
+<div class="toolbar"><button v-if="can('LAB_PATIENT_TESTS','add')" @click="newOrder">+ Add Test Patient</button></div>
 <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all patient lab order fields..." /></div>
 <table class="table"><tr><th class="sortable" @click="sortBy('orderNumber')">Order <span class="sort-indicator">{{sortIndicator('orderNumber')}}</span></th><th class="sortable" @click="sortBy('patientName')">Patient <span class="sort-indicator">{{sortIndicator('patientName')}}</span></th><th class="sortable" @click="sortBy('createdAtUtc')">Date <span class="sort-indicator">{{sortIndicator('createdAtUtc')}}</span></th><th class="sortable" @click="sortBy('testCount')">Tests <span class="sort-indicator">{{sortIndicator('testCount')}}</span></th><th class="sortable" @click="sortBy('status')">Status <span class="sort-indicator">{{sortIndicator('status')}}</span></th><th></th></tr><tr v-for="x in pagedOrders" :key="x.id"><td>{{x.orderNumber}}</td><td>{{x.patientName}}<div class="muted">{{x.patientCode}}</div></td><td>{{new Date(x.createdAtUtc).toLocaleString()}}</td><td>{{x.testCount}}</td><td>{{x.status}}</td><td class="actions"><button @click="openOrder(x)">View / Update Results</button><button @click="printOrderResults(x)">Print</button></td></tr></table>
 <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page=$event" />
@@ -371,10 +492,12 @@ onMounted(load)
               v-for="column in resultData.columns"
               :key="column.id"
             >
-              <input
+              <textarea
+                rows="2"
+                class="lab-master-cell"
                 v-model="row.values[column.id]"
                 :placeholder="column.name"
-              >
+              ></textarea>
             </td>
           </tr>
         </tbody>

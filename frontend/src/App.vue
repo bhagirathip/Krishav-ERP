@@ -155,65 +155,93 @@ onMounted(async () => {
       <router-link v-if="show('OT')" to="/ot">OT Management</router-link>
       <router-link v-if="show('FOLLOWUP')" to="/followups">Follow-up</router-link>
 
-      <div v-if="show('PHARMACY')" class="menu-group collapsible-menu">
+      <div
+        v-if="
+          show('PHARMACY_DISTRIBUTOR') ||
+          show('PHARMACY_PURCHASE') ||
+          show('PHARMACY_SALES') ||
+          show('PHARMACY_EXPIRY') ||
+          show('PHARMACY_STOCK_REPORT')
+        "
+        class="menu-group collapsible-menu"
+      >
         <button type="button" class="menu-collapse-button" @click="pharmacyOpen = !pharmacyOpen">
           <span>Pharmacy</span>
           <span>{{ pharmacyOpen ? '▾' : '▸' }}</span>
         </button>
         <div v-show="pharmacyOpen" class="submenu">
-          <router-link class="submenu-link" to="/pharmacy/distributors">Distributor Master</router-link>
-          <router-link class="submenu-link" to="/pharmacy/purchase">Purchase</router-link>
-          <router-link class="submenu-link" to="/pharmacy/sales">Sales</router-link>
-          <router-link class="submenu-link" to="/pharmacy/expiry">Expiry Medicine</router-link>
-          <router-link class="submenu-link" to="/pharmacy/stock-report">Stock Report</router-link>
+          <router-link v-if="show('PHARMACY_DISTRIBUTOR')" class="submenu-link" to="/pharmacy/distributors">Distributor Master</router-link>
+          <router-link v-if="show('PHARMACY_PURCHASE')" class="submenu-link" to="/pharmacy/purchase">Purchase</router-link>
+          <router-link v-if="show('PHARMACY_SALES')" class="submenu-link" to="/pharmacy/sales">Sales</router-link>
+          <router-link v-if="show('PHARMACY_EXPIRY')" class="submenu-link" to="/pharmacy/expiry">Expiry Medicine</router-link>
+          <router-link v-if="show('PHARMACY_STOCK_REPORT')" class="submenu-link" to="/pharmacy/stock-report">Stock Report</router-link>
         </div>
       </div>
 
-      <div v-if="show('LAB')" class="menu-group collapsible-menu">
+      <div
+        v-if="show('LAB_MASTER') || show('LAB_PATIENT_TESTS') || show('LAB_CBC_ANALYZER')"
+        class="menu-group collapsible-menu"
+      >
         <button type="button" class="menu-collapse-button" @click="labOpen = !labOpen">
           <span>Lab</span>
           <span>{{ labOpen ? '▾' : '▸' }}</span>
         </button>
         <div v-show="labOpen" class="submenu">
-          <router-link class="submenu-link" to="/lab/master">Add Lab Test Master</router-link>
-          <router-link class="submenu-link" to="/lab/patient-tests">Add Test Patient</router-link>
-          <router-link class="submenu-link" to="/lab/cbc-analyzer">CBC Analyzer Results</router-link>
-        </div>
-      </div>
-
-      <div v-if="show('STAFF')" class="menu-group collapsible-menu">
-        <button type="button" class="menu-collapse-button" @click="staffOpen = !staffOpen">
-          <span>Staff</span>
-          <span>{{ staffOpen ? '▾' : '▸' }}</span>
-        </button>
-        <div v-show="staffOpen" class="submenu">
-          <router-link class="submenu-link" to="/staff/master">Staff Master</router-link>
-          <router-link class="submenu-link" to="/staff/designations">Designation Master</router-link>
-          <router-link class="submenu-link" to="/staff/attendance">Attendance</router-link>
-          <router-link class="submenu-link" to="/staff/salary">Salary / Payroll</router-link>
-        </div>
-      </div>
-
-      <div v-if="show('EXPENSE')" class="menu-group collapsible-menu">
-        <button type="button" class="menu-collapse-button" @click="expenseOpen = !expenseOpen">
-          <span>Expense</span>
-          <span>{{ expenseOpen ? '▾' : '▸' }}</span>
-        </button>
-        <div v-show="expenseOpen" class="submenu">
-          <router-link class="submenu-link" to="/expenses/daily">Daily Expense</router-link>
-          <router-link class="submenu-link" to="/expenses/lab">Lab Expense</router-link>
-          <router-link class="submenu-link" to="/expenses/pharmacy">Pharmacy Expense</router-link>
-          <router-link class="submenu-link" to="/expenses/doctor-settlements">Doctor Settlement</router-link>
+          <router-link v-if="show('LAB_MASTER')" class="submenu-link" to="/lab/master">Add Lab Test Master</router-link>
+          <router-link v-if="show('LAB_PATIENT_TESTS')" class="submenu-link" to="/lab/patient-tests">Add Test Patient</router-link>
+          <router-link v-if="show('LAB_CBC_ANALYZER')" class="submenu-link" to="/lab/cbc-analyzer">CBC Analyzer Results</router-link>
         </div>
       </div>
 
       <div
         v-if="
-          show('REPORTING') ||
-          show('LAB') ||
-          show('PHARMACY') ||
-          show('STAFF') ||
-          show('EXPENSE')
+          show('STAFF_MASTER') ||
+          show('STAFF_DESIGNATION') ||
+          show('STAFF_ATTENDANCE') ||
+          show('STAFF_SALARY')
+        "
+        class="menu-group collapsible-menu"
+      >
+        <button type="button" class="menu-collapse-button" @click="staffOpen = !staffOpen">
+          <span>Staff</span>
+          <span>{{ staffOpen ? '▾' : '▸' }}</span>
+        </button>
+        <div v-show="staffOpen" class="submenu">
+          <router-link v-if="show('STAFF_MASTER')" class="submenu-link" to="/staff/master">Staff Master</router-link>
+          <router-link v-if="show('STAFF_DESIGNATION')" class="submenu-link" to="/staff/designations">Designation Master</router-link>
+          <router-link v-if="show('STAFF_ATTENDANCE')" class="submenu-link" to="/staff/attendance">Attendance</router-link>
+          <router-link v-if="show('STAFF_SALARY')" class="submenu-link" to="/staff/salary">Salary / Payroll</router-link>
+        </div>
+      </div>
+
+      <div
+        v-if="
+          show('EXPENSE_DAILY') ||
+          show('EXPENSE_LAB') ||
+          show('EXPENSE_PHARMACY') ||
+          show('EXPENSE_DOCTOR_SETTLEMENT')
+        "
+        class="menu-group collapsible-menu"
+      >
+        <button type="button" class="menu-collapse-button" @click="expenseOpen = !expenseOpen">
+          <span>Expense</span>
+          <span>{{ expenseOpen ? '▾' : '▸' }}</span>
+        </button>
+        <div v-show="expenseOpen" class="submenu">
+          <router-link v-if="show('EXPENSE_DAILY')" class="submenu-link" to="/expenses/daily">Daily Expense</router-link>
+          <router-link v-if="show('EXPENSE_LAB')" class="submenu-link" to="/expenses/lab">Lab Expense</router-link>
+          <router-link v-if="show('EXPENSE_PHARMACY')" class="submenu-link" to="/expenses/pharmacy">Pharmacy Expense</router-link>
+          <router-link v-if="show('EXPENSE_DOCTOR_SETTLEMENT')" class="submenu-link" to="/expenses/doctor-settlements">Doctor Settlement</router-link>
+        </div>
+      </div>
+
+      <div
+        v-if="
+          show('REPORT_EXECUTIVE') ||
+          show('LAB_REPORT') ||
+          show('PHARMACY_REPORT') ||
+          show('STAFF_REPORT') ||
+          show('EXPENSE_REPORT')
         "
         class="menu-group collapsible-menu"
       >
@@ -222,11 +250,11 @@ onMounted(async () => {
           <span>{{ reportsOpen ? '▾' : '▸' }}</span>
         </button>
         <div v-show="reportsOpen" class="submenu">
-          <router-link v-if="show('REPORTING')" class="submenu-link" to="/reporting">Reporting</router-link>
-          <router-link v-if="show('LAB')" class="submenu-link" to="/lab/report">Lab Report</router-link>
-          <router-link v-if="show('PHARMACY')" class="submenu-link" to="/pharmacy/report">Pharmacy Report</router-link>
-          <router-link v-if="show('STAFF')" class="submenu-link" to="/staff/report">Staff Report</router-link>
-          <router-link v-if="show('EXPENSE')" class="submenu-link" to="/expenses/report">Expense Report</router-link>
+          <router-link v-if="show('REPORT_EXECUTIVE')" class="submenu-link" to="/reporting">Reporting</router-link>
+          <router-link v-if="show('LAB_REPORT')" class="submenu-link" to="/lab/report">Lab Report</router-link>
+          <router-link v-if="show('PHARMACY_REPORT')" class="submenu-link" to="/pharmacy/report">Pharmacy Report</router-link>
+          <router-link v-if="show('STAFF_REPORT')" class="submenu-link" to="/staff/report">Staff Report</router-link>
+          <router-link v-if="show('EXPENSE_REPORT')" class="submenu-link" to="/expenses/report">Expense Report</router-link>
         </div>
       </div>
 
@@ -306,7 +334,7 @@ onMounted(async () => {
           show('SETTINGS') ||
           show('ROLE') ||
           show('PERMISSION') ||
-          show('REFERRAL')
+          show('PAYOUT')
         "
         class="menu-group collapsible-menu"
       >
@@ -345,7 +373,7 @@ onMounted(async () => {
           </router-link>
 
           <router-link
-            v-if="show('REFERRAL')"
+            v-if="show('PAYOUT')"
             class="submenu-link"
             to="/payouts"
           >
