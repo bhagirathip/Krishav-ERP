@@ -24,6 +24,7 @@ const show = ref(false);
 const ipd = ref(false);
 const selected = ref(null);
 const errors = ref([]);
+const editingId = ref(null);
 
 const nowLocal = () => {
   const date = new Date();
@@ -135,6 +136,7 @@ function patientChanged() {
 
 function add() {
   errors.value = [];
+  editingId.value = null;
   form.value = {
     patientId: null,
     doctorId: null,
@@ -155,10 +157,47 @@ function add() {
   show.value = true;
 }
 
+// Only the doctor/vitals/complaint/referral fields are editable afterwards -
+// the visit type, date/time and any bill it already produced stay as they
+// were when it was created (patient and bill amounts aren't safe to shift
+// around after the fact from here).
+function editVisit(row) {
+  errors.value = [];
+  editingId.value = row.id;
+  form.value = {
+    patientId: row.patientId,
+    doctorId: row.doctorId,
+    visitType: row.visitType,
+    visitDateUtc: nowLocal(),
+    bloodPressure: row.bloodPressure || '',
+    temperatureC: row.temperatureC,
+    pulse: row.pulse,
+    weightKg: row.weightKg,
+    heightCm: row.heightCm,
+    spo2: row.spo2,
+    chiefComplaint: row.chiefComplaint || '',
+    marketingSource: row.marketingSource || 'Walk-in',
+    referrerId: row.referrerId,
+    followUpDate: null,
+    createBill: false
+  };
+  show.value = true;
+}
+
+async function deleteVisit(row) {
+  if (!confirm(`Delete visit ${row.visitNumber} for ${row.patientName}?`)) return;
+  try {
+    await api.delete(`/opd/${row.id}`);
+    await load();
+  } catch (error) {
+    alert(error.response?.data?.message || 'Unable to delete this visit.');
+  }
+}
+
 function validate() {
   const list = [];
 
-  if (!form.value.patientId) list.push('Patient is required.');
+  if (!editingId.value && !form.value.patientId) list.push('Patient is required.');
   if (!form.value.doctorId) list.push('Doctor is required.');
 
   if (!form.value.marketingSource) {
@@ -166,13 +205,14 @@ function validate() {
   }
 
   if (
+    !editingId.value &&
     form.value.visitType !== 'Appointment' &&
     !form.value.followUpDate
   ) {
     list.push('Follow-up date is required.');
   }
 
-  if (form.value.visitType === 'Appointment') {
+  if (!editingId.value && form.value.visitType === 'Appointment') {
     if (!form.value.visitDateUtc) list.push('Appointment date/time is required.');
     if (form.value.visitDateUtc && new Date(form.value.visitDateUtc) < new Date()) {
       list.push('Appointment cannot be before current date/time.');
@@ -192,17 +232,21 @@ async function save() {
   if (!validate()) return;
 
   try {
-    await api.post('/opd', {
-      ...form.value,
-      visitDateUtc: form.value.visitType === 'Appointment'
-        ? form.value.visitDateUtc
-        : nowLocal()
-    });
+    if (editingId.value) {
+      await api.put(`/opd/${editingId.value}`, form.value);
+    } else {
+      await api.post('/opd', {
+        ...form.value,
+        visitDateUtc: form.value.visitType === 'Appointment'
+          ? form.value.visitDateUtc
+          : nowLocal()
+      });
+    }
 
     show.value = false;
     await load();
   } catch (error) {
-    errors.value = [error.response?.data?.message || 'Unable to create OPD visit.'];
+    errors.value = [error.response?.data?.message || `Unable to ${editingId.value ? 'update' : 'create'} OPD visit.`];
   }
 }
 
@@ -226,14 +270,21 @@ async function saveIpd() {
   }
 }
 
+function printableNow() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function printableVital(label, value, suffix = '') {
-  // Leave it blank (no underscores) when not recorded, so there is clean
-  // empty space for the doctor to write the value by hand instead of a
-  // placeholder line.
-  const text = value === null || value === undefined || value === ''
-    ? ''
-    : `${value}${suffix}`;
-  return `<div><b>${label}:</b> ${text}</div>`;
+  // Leave the number blank when not recorded, so there is clean empty space
+  // for the doctor to write it in by hand - but the unit always prints
+  // regardless (with a blank writable gap before it when there's no value
+  // yet), so filling it in by hand only ever means writing the number
+  // itself, not the unit too.
+  const isBlank = value === null || value === undefined || value === '';
+  const text = isBlank ? '<span class="vital-blank">&nbsp;</span>' : value;
+  return `<div><b>${label}:</b> ${text}${suffix}</div>`;
 }
 
 function printHtml(html) {
@@ -269,7 +320,7 @@ async function printPrescription(row) {
     : '';
 
   const vitals = [
-    printableVital('BP', data.visit?.bloodPressure),
+    printableVital('BP', data.visit?.bloodPressure, ' mmHg'),
     printableVital('Temperature', data.visit?.temperatureC, ' °F'),
     printableVital('Pulse', data.visit?.pulse, ' bpm'),
     printableVital('Weight', data.visit?.weightKg, ' kg'),
@@ -288,11 +339,11 @@ async function printPrescription(row) {
     body { margin: 0; width: 210mm; min-height: 297mm; display: flex; flex-direction: column; font-family: Arial, sans-serif; color: #000; }
     .header-image { display: block; width: 210mm; height: 42mm; object-fit: fill; margin: 0; }
     .content { flex: 1 0 auto; display: flex; flex-direction: column; padding: 0 12mm 10mm; }
-    .patient-info { border-top: 2px solid #000; margin-bottom: 10px; }
-    .pi-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; padding: 6px 0; font-size: 15px; }
-    .pi-row:last-child { border-bottom: 2px solid #000; }
-    .pi-row b { display: inline-block; min-width: 110px; }
-    .vitals { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0 12px; margin-top: 10px; padding-bottom: 14px; border-bottom: 1px solid #999; font-size: 13px; }
+    .patient-info { border-top: 2px solid #000; border-bottom: 2px solid #000; margin-bottom: 10px; padding: 6px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; font-size: 15px; }
+    .pi-col div { padding: 3px 0; }
+    .pi-col b { display: inline-block; min-width: 110px; }
+    .vitals { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0 8px; margin-top: 10px; padding-bottom: 14px; border-bottom: 1px solid #999; font-size: 12px; white-space: nowrap; }
+    .vital-blank { display: inline-block; min-width: 9mm; }
     .blank-space { flex: 1 0 auto; }
     .rx-footer { flex: 0 0 auto; display: flex; justify-content: flex-end; }
     .signature-block { text-align: center; min-width: 200px; }
@@ -305,9 +356,17 @@ async function printPrescription(row) {
   ${header}
   <div class="content">
     <div class="patient-info">
-      <div class="pi-row"><span><b>Patient:</b> ${data.patient.name}</span><span><b>Patient ID:</b> ${data.patient.patientCode}</span></div>
-      <div class="pi-row"><span><b>Age / Gender:</b> ${ageText(data.patient)} / ${data.patient.gender}</span><span><b>Phone:</b> ${data.patient.phone}</span></div>
-      <div class="pi-row"><span><b>Doctor:</b> ${data.doctor?.name || '-'}</span><span><b>Specialisation:</b> ${data.doctor?.specialisation || '-'}</span></div>
+      <div class="pi-col">
+        <div><b>Patient:</b> ${data.patient.name}</div>
+        <div><b>Patient ID:</b> ${data.patient.patientCode}</div>
+        <div><b>Age / Gender:</b> ${ageText(data.patient)} / ${data.patient.gender}</div>
+        <div><b>Phone:</b> ${data.patient.phone}</div>
+      </div>
+      <div class="pi-col">
+        <div><b>Appointment Time:</b> ${printableNow()}</div>
+        <div><b>Doctor:</b> ${data.doctor?.name || '-'}</div>
+        <div><b>Specialization:</b> ${data.doctor?.specialisation || '-'}</div>
+      </div>
     </div>
     <div class="vitals">${vitals}</div>
     <div class="blank-space"></div>
@@ -373,6 +432,8 @@ onMounted(async () => {
       <td class="actions">
         <button @click="printPrescription(row)">Blank Prescription</button>
         <button v-if="!row.convertedToIpd" @click="convertToIpd(row)">OPD → IPD</button>
+        <button v-if="can('OPD', 'edit')" @click="editVisit(row)">Edit</button>
+        <button v-if="can('OPD', 'delete')" class="danger-btn" @click="deleteVisit(row)">Delete</button>
       </td>
     </tr>
   </table>
@@ -381,7 +442,7 @@ onMounted(async () => {
   <div v-if="show" class="modal-bg">
     <div class="modal modal-lg">
       <button class="modal-close-x" @click="show = false">×</button>
-      <h2>Add OPD / Emergency / Dental / Appointment</h2>
+      <h2>{{ editingId ? 'Edit Visit' : 'Add OPD / Emergency / Dental / Appointment' }}</h2>
 
       <div v-if="errors.length" class="error-box">
         <div v-for="error in errors" :key="error">{{ error }}</div>
@@ -390,7 +451,7 @@ onMounted(async () => {
       <div class="form-grid">
         <label>
           Patient *
-          <select v-model.number="form.patientId" @change="patientChanged">
+          <select v-model.number="form.patientId" @change="patientChanged" :disabled="!!editingId">
             <option :value="null">Select Patient</option>
             <option v-for="patient in patients" :key="patient.id" :value="patient.id">{{ patient.name }} · {{ patient.patientCode }}</option>
           </select>
@@ -398,7 +459,7 @@ onMounted(async () => {
 
         <label>
           Type *
-          <select v-model="form.visitType" @change="typeChanged">
+          <select v-model="form.visitType" @change="typeChanged" :disabled="!!editingId">
             <option
               v-for="type in opdTypes"
               :key="type.id"
@@ -417,7 +478,7 @@ onMounted(async () => {
           </select>
         </label>
 
-        <label>
+        <label v-if="!editingId">
           Date / Time
           <input
             v-model="form.visitDateUtc"
@@ -454,7 +515,7 @@ onMounted(async () => {
           </select>
         </label>
 
-        <label v-if="form.visitType !== 'Appointment'">
+        <label v-if="!editingId && form.visitType !== 'Appointment'">
           Follow-up Date *
           <input
             type="date"
@@ -466,14 +527,14 @@ onMounted(async () => {
           </span>
         </label>
 
-        <label>BP<input v-model="form.bloodPressure" placeholder="120/80"></label>
+        <label>BP (mmHg)<input v-model="form.bloodPressure" placeholder="120/80"></label>
         <label>Temperature °F<input v-model.number="form.temperatureC" type="number" step="0.1"></label>
         <label>Pulse (bpm)<input v-model.number="form.pulse" type="number" min="30" max="250"></label>
         <label>Weight kg<input v-model.number="form.weightKg" type="number" step="0.1"></label>
         <label>Height cm<input v-model.number="form.heightCm" type="number" step="0.1"></label>
         <label>SpO₂ %<input v-model.number="form.spo2" type="number"></label>
         <label class="full">Chief Complaint<textarea v-model="form.chiefComplaint" rows="4"></textarea></label>
-        <label class="toggle-row"><input v-model="form.createBill" type="checkbox"> Create bill</label>
+        <label v-if="!editingId" class="toggle-row"><input v-model="form.createBill" type="checkbox"> Create bill</label>
       </div>
 
       <div class="modal-actions">

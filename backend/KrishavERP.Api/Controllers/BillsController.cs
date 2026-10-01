@@ -13,11 +13,13 @@ public class BillsController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly DiscountService _discounts;
+    private readonly IWebHostEnvironment _env;
 
-    public BillsController(AppDbContext db, DiscountService discounts)
+    public BillsController(AppDbContext db, DiscountService discounts, IWebHostEnvironment env)
     {
         _db = db;
         _discounts = discounts;
+        _env = env;
     }
 
     [HttpGet]
@@ -199,7 +201,7 @@ public class BillsController : ControllerBase
         var individualDiscount = bill.Items.Sum(x => x.DiscountAmount);
         var afterIndividualDiscount = beforeDiscount - individualDiscount;
 
-        string Setting(string name) => _db.AppSettings.FirstOrDefault(x => x.Name == name && x.IsActive)?.Value ?? string.Empty;
+        string Setting(string name) => AssetVersioning.Stamp(_env, _db.AppSettings.FirstOrDefault(x => x.Name == name && x.IsActive)?.Value ?? string.Empty);
         var header = bill.BillType.Equals("Lab", StringComparison.OrdinalIgnoreCase)
             ? Setting("Lab Header")
             : bill.BillType.Equals("Pharmacy", StringComparison.OrdinalIgnoreCase) ? Setting("Pharmacy Header") : Setting("OPD Header");

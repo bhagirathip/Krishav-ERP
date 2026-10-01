@@ -13,11 +13,13 @@ public class PharmacySalesController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly DiscountService _discounts;
+    private readonly IWebHostEnvironment _env;
 
-    public PharmacySalesController(AppDbContext db, DiscountService discounts)
+    public PharmacySalesController(AppDbContext db, DiscountService discounts, IWebHostEnvironment env)
     {
         _db = db;
         _discounts = discounts;
+        _env = env;
     }
 
     [HttpGet("search")]
@@ -45,10 +47,12 @@ public class PharmacySalesController : ControllerBase
                 (x.PurchaseInvoice != null && x.PurchaseInvoice.InvoiceNumber.Contains(text)));
         }
 
+        // No row cap here - the frontend already paginates this list
+        // client-side (useGrid), so capping it server-side just silently
+        // hid inventory past the 200th batch instead of paging through it.
         var raw = await query
             .OrderBy(x => x.ProductName)
             .ThenBy(x => x.ExpiryDate)
-            .Take(200)
             .Select(x => new
             {
                 x.Id,
@@ -419,10 +423,10 @@ public class PharmacySalesController : ControllerBase
             doctor = await _db.Doctors.FindAsync(sale.DoctorId.Value);
         }
 
-        var header = await _db.AppSettings
+        var header = AssetVersioning.Stamp(_env, await _db.AppSettings
             .Where(x => x.IsActive && x.Name == "Pharmacy Header")
             .Select(x => x.Value)
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync());
 
         var gstNumber = await _db.AppSettings
             .Where(x => x.IsActive && x.Name == "GST Number")

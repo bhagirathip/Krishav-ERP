@@ -110,6 +110,42 @@ function renderWithBold(value){
   return escapeHtml(value).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
 }
 
+// Applies **bold**, *italic*/_italic_ and "- "/"* " bullet lines to Note text
+// - the fuller formatting toolkit the Note field's Bold/Italic/Bullet buttons
+// (in Lab Test Master) write into the text, since a note is often several
+// sentences rather than one short value.
+function renderInline(value){
+  let html=escapeHtml(value);
+  html=html.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  html=html.replace(/(^|[^*])\*([^*]+)\*/g,'$1<i>$2</i>');
+  html=html.replace(/(^|[^_])_([^_]+)_/g,'$1<i>$2</i>');
+  return html;
+}
+
+function renderNoteHtml(value){
+  const lines=String(value??'').split(/\r\n|\r|\n/);
+  const parts=[];
+  let bulletItems=null;
+  const flushBullets=()=>{
+    if(bulletItems){parts.push(`<ul class="note-list">${bulletItems.join('')}</ul>`);bulletItems=null}
+  };
+
+  lines.forEach(line=>{
+    const trimmed=line.trim();
+    const bullet=trimmed.match(/^[-*]\s+(.*)$/);
+    if(bullet){
+      bulletItems=bulletItems||[];
+      bulletItems.push(`<li>${renderInline(bullet[1])}</li>`);
+    }else{
+      flushBullets();
+      if(trimmed!=='')parts.push(`<div>${renderInline(line)}</div>`);
+    }
+  });
+  flushBullets();
+
+  return parts.join('');
+}
+
 // One shared result table for one or more tests: the column header row (No.,
 // Investigation, Unit, Range, ...) is printed once, then each test contributes
 // a name row followed by its own parameter rows - instead of a separate table
@@ -148,7 +184,7 @@ function buildMergedTestsHtml(results){
         ? String(row.values?.[valueColumnId]??'').trim()!==''
         : columns.some(c=>String(row.values?.[c.id]??'').trim()!==''));
 
-    const nameRowHtml=`<tr class="test-name-row"><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}">${renderWithBold(data.test?.name||'')}</td></tr>`;
+    const nameRowHtml=`<tr class="print-atomic-row test-name-row"><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}">${renderWithBold(data.test?.name||'')}</td></tr>`;
     const rowsHtml=rows.length
       ? rows.map(row=>{
           const outOfRange=valueColumnId&&rangeColumnId
@@ -162,20 +198,59 @@ function buildMergedTestsHtml(results){
               :'';
             return `<td>${renderWithBold(cellValue)}${methodLine}</td>`;
           }).join('');
-          return `<tr${outOfRange?' class="out-of-range"':''}><td class="no-col">${rowCounter}</td>${cells}</tr>`;
+          return `<tr class="print-atomic-row${outOfRange?' out-of-range':''}"><td class="no-col">${rowCounter}</td>${cells}</tr>`;
         }).join('')
-      : `<tr><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}" class="muted-cell">No results entered yet.</td></tr>`;
+      : `<tr class="print-atomic-row"><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}" class="muted-cell">No results entered yet.</td></tr>`;
     const noteHtml=data.test?.note
-      ? `<tr class="note-row"><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}" class="note-cell">Note: ${renderWithBold(data.test.note)}</td></tr>`
+      ? `<tr class="print-atomic-row note-row"><td class="no-col"></td><td colspan="${Math.max(1,displayCols.length)}" class="note-cell"><b>Note:</b> ${renderNoteHtml(data.test.note)}</td></tr>`
       : '';
 
     return nameRowHtml+rowsHtml+noteHtml;
   }).join('');
 
+  // Printed once at the end of the whole merged block (not per test), full
+  // width so it's centered on the page rather than just the data columns.
+  const stayHealthyHtml=`<tr class="print-atomic-row stay-healthy-row"><td colspan="${Math.max(1,displayCols.length)+1}">***** Stay Healthy *****</td></tr>`;
+
   return `<table class="result-table">
     <thead><tr>${headerHtml}</tr></thead>
-    <tbody>${bodyHtml}</tbody>
+    <tbody>${bodyHtml}${stayHealthyHtml}</tbody>
   </table>`;
+}
+
+// Splits a batch of tests into print blocks by their Lab Test Master Group:
+// tests sharing the same (non-empty) group are merged onto one shared table
+// together, in the order their group was first encountered; a test with no
+// group always gets its own separate block instead of merging with anything.
+function partitionByGroup(results){
+  const groupedBlocks=new Map();
+  const blocks=[];
+
+  results.forEach(data=>{
+    const groupName=(data.test?.group||'').trim();
+    if(!groupName){
+      blocks.push([data]);
+      return;
+    }
+    if(!groupedBlocks.has(groupName)){
+      const block=[];
+      groupedBlocks.set(groupName,block);
+      blocks.push(block);
+    }
+    groupedBlocks.get(groupName).push(data);
+  });
+
+  return blocks;
+}
+
+// Renders each group's block as its own <table>, wrapped so every block
+// after the first forces a fresh printed page - a group's tests share a
+// page (and overflow across more pages together like any merged print), but
+// never bleed onto the same page as a different group or an ungrouped test.
+function buildGroupedBlocksHtml(results){
+  return partitionByGroup(results)
+    .map(block=>`<div class="test-group-block">${buildMergedTestsHtml(block)}</div>`)
+    .join('');
 }
 
 // Wraps one or more test blocks with the shared header image, patient info
@@ -219,13 +294,16 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
         .signature-block .sig-label{margin-bottom:1px}
         .signature-block .sig-name{font-weight:700;font-size:12.5px}
         .signature-block .sig-qual{font-size:12px}
-        .page-box{text-align:right;align-self:end;padding-bottom:1mm;white-space:nowrap}
-        .page-box .page-number:after{content:counter(page)}
 
         /* Printed once, directly below the configured lab header. */
         .patient-info{border-top:1.5px solid #222;border-bottom:1.5px solid #222;margin:4mm 0;padding:2mm 1mm}
         .pi-row{display:grid;grid-template-columns:1fr 1fr;gap:0 12mm;padding:1.1mm 0;font-size:13.5px}
         .pi-row b{display:inline-block;min-width:27mm;font-weight:700}
+
+        /* Each Lab Test Master Group prints as its own block; every block
+           after the first is forced onto a fresh page so one group's tests
+           never share a page with a different group or an ungrouped test. */
+        .test-group-block+.test-group-block{break-before:page;page-break-before:always}
 
         /* The column header (No./Investigation/Unit/Range/...) is printed once
            for the whole table; each test contributes a name row (kept with its
@@ -236,13 +314,25 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
         .result-table tbody td{padding:1.25mm 2mm;text-align:left;vertical-align:top;word-break:break-word;white-space:pre-line;font-size:13px;border:0}
         .result-table tbody tr{break-inside:avoid;page-break-inside:avoid}
         .result-table tbody tr.out-of-range td{font-weight:700}
-        /* No border between tests - a bigger, bolder name plus generous
-           top spacing is what tells two tests apart on the printed page. */
-        .test-name-row td{font-weight:700;font-size:17px;padding-top:7mm;border-top:0}
+        /* No border between tests - a bigger, bolder H1-style name plus
+           generous top spacing is what tells two tests apart on the page. */
+        .test-name-row td{font-weight:700;font-size:22px;text-decoration:underline;padding-top:7mm;border-top:0}
         .method-line{font-size:11px;color:#333;font-style:italic;margin-top:0.6mm;white-space:pre-line}
         .no-col{width:10mm;text-align:center!important}
         .muted-cell{color:#777;font-style:italic}
-        .note-cell{color:#444;font-style:italic;font-size:12.5px;white-space:pre-line}
+        .note-cell{color:#444;font-size:12.5px}
+        .note-cell div{margin:0.5mm 0}
+        .note-list{margin:1mm 0 0.5mm;padding-left:5mm}
+        .note-list li{margin:0.5mm 0}
+        .stay-healthy-row td{text-align:center!important;font-weight:700;padding-top:3mm;font-size:13px}
+
+        /* One indicator prints at the bottom of every page: P.T.O in the
+           middle on every page but the last (there's nothing left to turn
+           to), and this page's number over the total on every page. */
+        .page-indicator-row td{padding-top:2mm}
+        .page-indicator{display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;font-size:11px;font-weight:700}
+        .page-indicator .pto{text-align:center}
+        .page-indicator .pageno{text-align:right}
       </style>
     </head>
     <body>
@@ -266,7 +356,6 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
               <div class="sig-name">${escapeHtml(hospital.labSignatoryName||'')}</div>
               <div class="sig-qual">${escapeHtml(hospital.labSignatoryQualification||'')}</div>
             </div>
-            <!--<div class="page-box">Page <span class="page-number"></span></div>-->
           </div>
         </td></tr></tfoot>
 
@@ -286,48 +375,111 @@ function buildLabReportHtml({hospital,patient,order,reportDate,blocksHtml}){
         const waitForImages=()=>Promise.all(Array.from(document.images).map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=img.onerror=resolve})));
 
         // A table's rows never stretch to fill a page on their own, so a
-        // short report's footer would otherwise sit right under the last
-        // result instead of at the bottom of the page - and on a long report
-        // that spans several pages, the tail end of the last page has the
-        // same problem. Fixed by measuring the natural (unpaginated) height
-        // of the header/footer/content once the layout has settled, working
-        // out how much of the final page is still empty, and inserting one
-        // spacer of exactly that height at the end of the content so it
-        // flows onto that last page and pushes the footer down to the
-        // bottom - every earlier page is untouched and paginates normally.
-        function fillLastPageToFooter(){
+        // short page's "P.T.O / Page X/Y" line (and, on the last page, the
+        // footer) would otherwise sit right under the last result instead of
+        // at the bottom of the page - and knowing where to put that line at
+        // all means knowing exactly where each page will break BEFORE the
+        // browser paginates it. All three are solved together: walk every
+        // atomic row (test name / result / note) in document order,
+        // simulate the same page-by-page packing the print engine will do
+        // (a Group's first row can share a page with the patient info panel
+        // or a still-open previous page; every later Group is forced onto a
+        // fresh page; anything taller than one page's budget just keeps
+        // flowing onto ordinary full pages), and at every resulting page
+        // boundary insert a spacer sized to whatever's left on that page
+        // followed by a real indicator row with a *forced* break right after
+        // it - turning what would have been the browser's own natural
+        // reflow into a break we already knew was coming, so our page count
+        // and the real one always agree. The last page shows "End Result"
+        // instead of "P.T.O" (there's nothing left to turn to).
+        function paginatePrint(){
+          // Idempotent: drop anything a previous call already inserted
+          // before recomputing, so calling this more than once never stacks
+          // up duplicate fillers/indicators.
+          document.querySelectorAll('.page-filler-row,.page-indicator-row').forEach(el=>el.remove());
+
           const header=document.querySelector('.lab-page-header');
           const footer=document.querySelector('.lab-page-footer');
-          const main=document.querySelector('main');
-          if(!header||!footer||!main)return;
+          const patientInfo=document.querySelector('.patient-info');
+          const blocks=[...document.querySelectorAll('.test-group-block')];
+          const rows=[...document.querySelectorAll('.print-atomic-row')];
+          if(!header||!footer||!rows.length)return;
 
+          const blockIndex=new Map(blocks.map((b,i)=>[b,i]));
           const mmToPx=96/25.4;
+          const indicatorPx=7*mmToPx; // the "P.T.O / Page X/Y" line's own fixed, single-line height
           // A small safety margin: the print engine's own pagination doesn't
           // line up with this on-screen measurement to the sub-pixel, and
           // filling all the way to the calculated edge risks rounding error
           // spilling a sliver of content onto a spurious extra blank page -
           // better to leave a few mm of slack above the footer than that.
-          const safetyPx=10*mmToPx;
+          const safetyPx=20*mmToPx;
           const pageContentPx=277*mmToPx; // A4 height minus the 10mm @page margin on both edges
           const headerPx=header.getBoundingClientRect().height;
           const footerPx=footer.getBoundingClientRect().height;
-          const mainPx=main.getBoundingClientRect().height;
-          const perPageBodyPx=pageContentPx-headerPx-footerPx-safetyPx;
+          const perPageBodyPx=pageContentPx-headerPx-footerPx-indicatorPx-safetyPx;
           if(perPageBodyPx<=0)return;
 
-          const totalPages=Math.max(1,Math.ceil(mainPx/perPageBodyPx));
-          const usedOnLastPage=mainPx-(totalPages-1)*perPageBodyPx;
-          const fillerPx=perPageBodyPx-usedOnLastPage;
-          if(fillerPx>1){
-            const filler=document.createElement('div');
-            filler.style.height=fillerPx+'px';
-            main.appendChild(filler);
+          let usedOnCurrentPage=patientInfo?patientInfo.getBoundingClientRect().height:0;
+          let totalPages=1;
+          const breaks=[];
+
+          rows.forEach((row,i)=>{
+            const rowGroup=blockIndex.get(row.closest('.test-group-block'));
+            if(i>0){
+              const prevGroup=blockIndex.get(rows[i-1].closest('.test-group-block'));
+              if(rowGroup!==prevGroup){
+                breaks.push({afterRow:rows[i-1],pageNumber:totalPages,fillerPx:perPageBodyPx-usedOnCurrentPage});
+                totalPages++;
+                usedOnCurrentPage=0;
+              }
+            }
+            const rowPx=row.getBoundingClientRect().height;
+            if(usedOnCurrentPage+rowPx<=perPageBodyPx){
+              usedOnCurrentPage+=rowPx;
+            }else{
+              breaks.push({afterRow:rows[i-1],pageNumber:totalPages,fillerPx:perPageBodyPx-usedOnCurrentPage});
+              totalPages++;
+              usedOnCurrentPage=rowPx;
+            }
+          });
+
+          function insertPageEnd(afterRow,pageNumber,fillerPx,isIntermediate){
+            const table=afterRow.closest('table');
+            const colCount=table?.querySelectorAll('thead th').length||1;
+
+            if(fillerPx>1){
+              const fillerRow=document.createElement('tr');
+              fillerRow.className='page-filler-row';
+              const fillerTd=document.createElement('td');
+              fillerTd.colSpan=colCount;
+              fillerTd.style.height=fillerPx+'px';
+              fillerTd.style.padding='0';
+              fillerRow.appendChild(fillerTd);
+              afterRow.after(fillerRow);
+              afterRow=fillerRow;
+            }
+
+            const indicatorRow=document.createElement('tr');
+            indicatorRow.className='page-indicator-row';
+            if(isIntermediate){
+              indicatorRow.style.breakAfter='page';
+              indicatorRow.style.pageBreakAfter='always';
+            }
+            const indicatorTd=document.createElement('td');
+            indicatorTd.colSpan=colCount;
+            indicatorTd.innerHTML='<div class="page-indicator"><span></span><span class="pto">'+(isIntermediate?'P.T.O':'End Result')+'</span><span class="pageno">Page '+pageNumber+'/'+totalPages+'</span></div>';
+            indicatorRow.appendChild(indicatorTd);
+            afterRow.after(indicatorRow);
           }
+
+          breaks.forEach(({afterRow,pageNumber,fillerPx})=>insertPageEnd(afterRow,pageNumber,fillerPx,true));
+          insertPageEnd(rows[rows.length-1],totalPages,perPageBodyPx-usedOnCurrentPage,false);
         }
 
         window.onload=async()=>{
           await waitForImages();
-          fillLastPageToFooter();
+          paginatePrint();
           setTimeout(()=>window.print(),100);
         };
         window.onafterprint=()=>window.parent.postMessage('lab-print','*');
@@ -372,7 +524,7 @@ async function printResult(t){
     patient:data.patient||{},
     order:data.order,
     reportDate:data.resultUpdatedAtUtc,
-    blocksHtml:buildMergedTestsHtml([data])
+    blocksHtml:buildGroupedBlocksHtml([data])
   });
   openPrintFrame(html);
 }
@@ -397,7 +549,7 @@ async function printMergedResults(orderTestRows){
     patient:results[0]?.patient||{},
     order:results[0]?.order,
     reportDate,
-    blocksHtml:buildMergedTestsHtml(results)
+    blocksHtml:buildGroupedBlocksHtml(results)
   });
   openPrintFrame(html);
 }
@@ -424,6 +576,18 @@ async function deleteOrderTest(t){
   }
 }
 
+// Delete button directly on the orders grid row - removes the whole order
+// (every test in it) and its bill, e.g. to clear out a duplicate entry.
+async function deleteOrder(x){
+  if(!confirm(`Delete order ${x.orderNumber} for ${x.patientName}? This removes all ${x.testCount} test(s) in it.`))return;
+  try{
+    await api.delete(`/lab/orders/${x.id}`);
+    await load();
+  }catch(error){
+    alert(error.response?.data?.message||'Unable to delete this order.');
+  }
+}
+
 function escapeHtml(value){
   return String(value??'')
     .replaceAll('&','&amp;')
@@ -440,7 +604,7 @@ onMounted(load)
 <h1>Patient Lab Tests</h1>
 <div class="toolbar"><button v-if="can('LAB_PATIENT_TESTS','add')" @click="newOrder">+ Add Test Patient</button></div>
 <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all patient lab order fields..." /></div>
-<table class="table"><tr><th class="sortable" @click="sortBy('orderNumber')">Order <span class="sort-indicator">{{sortIndicator('orderNumber')}}</span></th><th class="sortable" @click="sortBy('patientName')">Patient <span class="sort-indicator">{{sortIndicator('patientName')}}</span></th><th class="sortable" @click="sortBy('createdAtUtc')">Date <span class="sort-indicator">{{sortIndicator('createdAtUtc')}}</span></th><th class="sortable" @click="sortBy('testCount')">Tests <span class="sort-indicator">{{sortIndicator('testCount')}}</span></th><th class="sortable" @click="sortBy('status')">Status <span class="sort-indicator">{{sortIndicator('status')}}</span></th><th></th></tr><tr v-for="x in pagedOrders" :key="x.id"><td>{{x.orderNumber}}</td><td>{{x.patientName}}<div class="muted">{{x.patientCode}}</div></td><td>{{new Date(x.createdAtUtc).toLocaleString()}}</td><td>{{x.testCount}}</td><td>{{x.status}}</td><td class="actions"><button @click="openOrder(x)">View / Update Results</button><button @click="printOrderResults(x)">Print</button></td></tr></table>
+<table class="table"><tr><th class="sortable" @click="sortBy('orderNumber')">Order <span class="sort-indicator">{{sortIndicator('orderNumber')}}</span></th><th class="sortable" @click="sortBy('patientName')">Patient <span class="sort-indicator">{{sortIndicator('patientName')}}</span></th><th class="sortable" @click="sortBy('createdAtUtc')">Date <span class="sort-indicator">{{sortIndicator('createdAtUtc')}}</span></th><th class="sortable" @click="sortBy('testCount')">Tests <span class="sort-indicator">{{sortIndicator('testCount')}}</span></th><th class="sortable" @click="sortBy('status')">Status <span class="sort-indicator">{{sortIndicator('status')}}</span></th><th></th></tr><tr v-for="x in pagedOrders" :key="x.id"><td>{{x.orderNumber}}</td><td>{{x.patientName}}<div class="muted">{{x.patientCode}}</div></td><td>{{new Date(x.createdAtUtc).toLocaleString()}}</td><td>{{x.testCount}}</td><td>{{x.status}}</td><td class="actions"><button @click="openOrder(x)">View / Update Results</button><button @click="printOrderResults(x)">Print</button><button class="danger-btn" @click="deleteOrder(x)">Delete</button></td></tr></table>
 <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page=$event" />
 <div v-if="showOrder" class="modal-bg"><div class="modal modal-xl"><button class="modal-close-x" @click="showOrder=false">×</button><h2>Add Tests for Patient</h2><label>Patient *<select v-model.number="order.patientId"><option :value="null">Select Patient</option><option v-for="p in patients" :key="p.id" :value="p.id">{{p.name}} · {{p.patientCode}}</option></select></label><table class="table" style="margin-top:16px"><tr><th>Test</th><th>Price</th><th>Approved Discount</th><th>Discount</th><th>After Discount</th><th></th></tr><tr v-for="(l,i) in order.tests" :key="i"><td><select v-model.number="l.labTestId"><option :value="null">Select Test</option><option v-for="t in tests" :key="t.id" :value="t.id">{{t.name}}</option></select></td><td>₹{{linePrice(l).toFixed(2)}}</td><td><select v-model.number="l.discountTypeId"><option :value="null">No Discount</option><option v-for="d in discounts" :key="d.id" :value="d.id">{{d.name}} · {{d.discountMode==='Percent'?d.value+'%':'₹'+Number(d.value).toFixed(2)}}</option></select></td><td>₹{{lineDisc(l).toFixed(2)}}</td><td>₹{{(linePrice(l)-lineDisc(l)).toFixed(2)}}</td><td><button class="danger-btn" @click="removeTestLine(i)">×</button></td></tr></table><button @click="addTestLine">+ Add Test</button><div class="bill-total-box"><div><span>Before Discount</span><b>₹{{beforeTotal().toFixed(2)}}</b></div><div class="grand"><span>After Discount</span><b>₹{{afterTotal().toFixed(2)}}</b></div><div><span>Round Off (-9 to 9)</span><input v-model.number="order.roundOff" type="number" min="-9" max="9" step="1" style="width:80px;display:inline-block"></div><div class="grand"><span>Final Amount</span><b>₹{{finalTotal().toFixed(2)}}</b></div></div><div class="modal-actions"><button @click="saveOrder">Create Tests + Bill</button><button class="secondary" @click="showOrder=false">Cancel</button></div></div></div>
 <div v-if="showTests" class="modal-bg"><div class="modal modal-xl"><button class="modal-close-x" @click="showTests=false">×</button><div class="page-head"><h2>{{selectedOrder.patientName}} · {{selectedOrder.orderNumber}}</h2><div class="actions"><button v-if="orderTests.length" @click="printAllResults">Print All Results</button><button class="secondary" @click="showTests=false">Close</button></div></div><table class="table"><tr><th>Test</th><th>Status</th><th></th></tr><tr v-for="t in orderTests" :key="t.id"><td>{{t.testName}}</td><td>{{t.status}}</td><td class="actions"><button @click="openResult(t)">Edit</button><button @click="printResult(t)">Print</button><button class="danger-btn" @click="deleteOrderTest(t)">Delete</button></td></tr></table><div class="modal-actions"><button class="secondary" @click="showTests=false">Close</button></div></div></div>

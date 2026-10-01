@@ -29,8 +29,14 @@ public class SettingsController:ControllerBase
             "Hospital Name","Hospital Logo","Hospital Address","Hospital Phone","OPD Header","Lab Header","Pharmacy Header"
         }
         ;
-        return Ok(await db.AppSettings.Where(x=>x.IsActive&&names.Contains(x.Name)).ToListAsync());
+        var rows=await db.AppSettings.Where(x=>x.IsActive&&names.Contains(x.Name)).ToListAsync();
+        foreach(var row in rows.Where(x=>x.Type=="Branding"))row.Value=AssetVersioning.Stamp(env,row.Value);
+        return Ok(rows);
     }
+    // Deliberately NOT cache-busted like Branding() below: this feeds the
+    // Settings admin edit modal, and stamping a "?v=..." onto Value here
+    // would get silently resaved as the permanent stored path the moment
+    // someone opens Edit and clicks Save without touching it.
     [HttpGet]
     public async Task<IActionResult> Get()=>Ok(await db.AppSettings.Where(x=>x.IsActive).OrderBy(x=>x.Type).ThenBy(x=>x.Name).ToListAsync());
     [HttpPost]

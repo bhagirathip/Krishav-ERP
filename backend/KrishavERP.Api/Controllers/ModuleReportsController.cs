@@ -131,6 +131,19 @@ public class ModuleReportsController : ControllerBase
             .Where(x => x.ExpenseDate >= start && x.ExpenseDate < end)
             .SumAsync(x => (decimal?)x.Amount) ?? 0;
 
+        // How many times each individual test was ordered in this date
+        // range, e.g. "CBC x 14" - lets the lab see which tests actually
+        // ran, not just the overall order count.
+        var testBreakdown = await (
+            from ot in _db.LabOrderTests
+            join o in _db.LabOrders on ot.LabOrderId equals o.Id
+            join t in _db.LabTests on ot.LabTestId equals t.Id
+            where o.CreatedAtUtc >= start && o.CreatedAtUtc < end
+            group t by t.Name into g
+            select new { TestName = g.Key, Count = g.Count() }
+        ).OrderByDescending(x => x.Count).ThenBy(x => x.TestName).ToListAsync();
+        var totalIndividualTests = testBreakdown.Sum(x => x.Count);
+
         var paid = await _db.LabPurchaseExpenses
             .Where(x => x.PaymentDate.HasValue && x.PaymentDate.Value >= start && x.PaymentDate.Value < end)
             .SumAsync(x => (decimal?)x.PaidAmount) ?? 0;
@@ -169,7 +182,9 @@ public class ModuleReportsController : ControllerBase
             LabExpensePaid = paid,
             LabOperatingContribution = income - purchases,
             Year = selectedYear,
-            Monthly = monthly
+            Monthly = monthly,
+            TotalIndividualTests = totalIndividualTests,
+            TestBreakdown = testBreakdown
         });
     }
 

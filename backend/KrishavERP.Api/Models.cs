@@ -975,6 +975,14 @@ public class LabTest
         get;
         set;
     }
+    // Tests sharing the same (non-empty) Group print merged together onto one
+    // page when several tests are printed at once; an empty/null Group means
+    // this test always prints on its own separate page instead.
+    public string? Group
+    {
+        get;
+        set;
+    }
     public bool IsActive
     {
         get;

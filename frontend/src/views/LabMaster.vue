@@ -29,12 +29,18 @@ function emptyMaster() {
     name: '',
     price: 0,
     note: '',
+    group: '',
     columns,
     rows: [{ id: uid('r'), values: {} }]
   };
 }
 
 const { search, page, pageCount, pagedRows: pagedTests, sortedRows, sortBy, sortIndicator } = useGrid(tests, pageSize);
+
+const groupOptions = computed(() => {
+  const names = new Set(tests.value.map(x => (x.group || '').trim()).filter(Boolean));
+  return [...names].sort();
+});
 
 async function load() {
   tests.value = (await api.get('/lab/tests')).data;
@@ -81,6 +87,7 @@ function editMaster(test) {
     name: test.name,
     price: Number(test.price || 0),
     note: test.note || '',
+    group: test.group || '',
     columns: schema.columns.map(x => ({ id: x.id || uid('c'), name: x.name || '' })),
     rows: schema.rows.map(x => ({ id: x.id || uid('r'), values: { ...(x.values || {}) } }))
   };
@@ -102,22 +109,48 @@ function deleteColumn(index) {
   master.value.rows.forEach(row => delete row.values[column.id]);
 }
 
-// Toggles ** around the selected text in the Note field - the same manual
-// bold marker the lab print already understands for test names, results and
-// notes, so this button is just a shortcut for typing ** yourself.
-function wrapNoteBold() {
+// Toggles a marker (** for bold, * for italic) around the selected text in
+// the Note field - the same manual convention the lab print already
+// understands for test names, results and notes, so these buttons are just a
+// shortcut for typing the marker yourself.
+function wrapNoteText(marker) {
   const el = noteArea.value;
   if (!el) return;
   const start = el.selectionStart, end = el.selectionEnd;
-  if (start === end) { alert('Select the text you want to bold first.'); return; }
+  if (start === end) { alert('Select the text you want to format first.'); return; }
   const value = master.value.note || '';
   const selected = value.slice(start, end);
-  const alreadyBold = selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4;
-  const replacement = alreadyBold ? selected.slice(2, -2) : `**${selected}**`;
+  const alreadyWrapped = selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2;
+  const replacement = alreadyWrapped ? selected.slice(marker.length, -marker.length) : `${marker}${selected}${marker}`;
   master.value.note = value.slice(0, start) + replacement + value.slice(end);
   requestAnimationFrame(() => {
     el.focus();
     el.setSelectionRange(start, start + replacement.length);
+  });
+}
+
+// Prefixes every selected line with "- " so it prints as a bullet list item;
+// toggles it back off if the selected lines already start that way.
+function toggleNoteBullets() {
+  const el = noteArea.value;
+  if (!el) return;
+  const start = el.selectionStart, end = el.selectionEnd;
+  if (start === end) { alert('Select the lines you want as bullets first.'); return; }
+  const value = master.value.note || '';
+  let lineStart = value.lastIndexOf('\n', start - 1) + 1;
+  let lineEnd = value.indexOf('\n', end);
+  if (lineEnd === -1) lineEnd = value.length;
+  const block = value.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+  const alreadyBulleted = lines.every(line => line.trim() === '' || /^[-*]\s/.test(line));
+  const newLines = alreadyBulleted
+    ? lines.map(line => line.replace(/^[-*]\s/, ''))
+    : lines.map(line => line.trim() === '' ? line : `- ${line}`);
+  const replacement = newLines.join('\n');
+  master.value.note = value.slice(0, lineStart) + replacement + value.slice(lineEnd);
+  requestAnimationFrame(() => {
+    el.focus();
+    el.setSelectionRange(lineStart, lineStart + replacement.length);
   });
 }
 
@@ -166,6 +199,7 @@ async function save() {
     name: master.value.name.trim(),
     price: Number(master.value.price || 0),
     note: master.value.note || '',
+    group: master.value.group || '',
     schemaJson: JSON.stringify(schema),
     components: buildComponents()
   };
@@ -202,9 +236,10 @@ onMounted(load);
   <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all lab master fields..." /></div>
 
   <table class="table">
-    <tr><th class="sortable" @click="sortBy('name')">Test <span class="sort-indicator">{{sortIndicator('name')}}</span></th><th class="sortable" @click="sortBy('price')">Price <span class="sort-indicator">{{sortIndicator('price')}}</span></th><th>Dynamic Table</th><th class="sortable" @click="sortBy('note')">Note <span class="sort-indicator">{{sortIndicator('note')}}</span></th><th></th></tr>
+    <tr><th class="sortable" @click="sortBy('name')">Test <span class="sort-indicator">{{sortIndicator('name')}}</span></th><th class="sortable" @click="sortBy('group')">Group <span class="sort-indicator">{{sortIndicator('group')}}</span></th><th class="sortable" @click="sortBy('price')">Price <span class="sort-indicator">{{sortIndicator('price')}}</span></th><th>Dynamic Table</th><th class="sortable" @click="sortBy('note')">Note <span class="sort-indicator">{{sortIndicator('note')}}</span></th><th></th></tr>
     <tr v-for="test in pagedTests" :key="test.id">
       <td>{{test.name}}</td>
+      <td>{{test.group || '-'}}</td>
       <td>₹{{Number(test.price).toFixed(2)}}</td>
       <td>{{summary(test)}}</td>
       <td>{{test.note || '-'}}</td>
@@ -232,7 +267,15 @@ onMounted(load);
       <div class="form-grid">
         <label>Test Name *<input v-model="master.name"></label>
         <label>Price *<input type="number" min="0" step="0.01" v-model.number="master.price"></label>
+        <label>
+          Group
+          <input v-model="master.group" list="lab-test-groups" placeholder="e.g. Fever Panel, Sugar Panel">
+          <datalist id="lab-test-groups">
+            <option v-for="g in groupOptions" :key="g" :value="g" />
+          </datalist>
+        </label>
       </div>
+      <div class="muted" style="margin-top:-6px;margin-bottom:14px">Tests sharing the same Group print merged onto one page together; leave blank to always print this test on its own page.</div>
 
       <div class="toolbar lab-master-toolbar">
         <button @click="addColumn">+ Add Column</button>
@@ -267,8 +310,10 @@ onMounted(load);
 
       <label style="display:block;margin-top:18px">
         Note
-        <button type="button" class="secondary compact-button" style="margin-left:8px" @click="wrapNoteBold" title="Wrap the selected text in ** so it prints bold">B</button>
-        <span class="muted" style="margin-left:8px">Select text and click B, or type **like this** yourself, to bold it on print.</span>
+        <button type="button" class="secondary compact-button" style="margin-left:8px" @click="wrapNoteText('**')" title="Wrap the selected text in ** so it prints bold"><b>B</b></button>
+        <button type="button" class="secondary compact-button" @click="wrapNoteText('*')" title="Wrap the selected text in * so it prints italic"><i>I</i></button>
+        <button type="button" class="secondary compact-button" @click="toggleNoteBullets" title="Prefix the selected lines with - so they print as bullet points">&bull; List</button>
+        <span class="muted" style="margin-left:8px">Select text and click B/I/List, or type **bold**, *italic* or "- " bullet lines yourself.</span>
         <textarea ref="noteArea" rows="4" v-model="master.note"></textarea>
       </label>
       <div class="modal-actions">

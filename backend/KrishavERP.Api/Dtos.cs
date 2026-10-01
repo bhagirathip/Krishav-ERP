@@ -194,6 +194,55 @@ public class OpdCreateRequest
     public int? ReferrerId { get; set; }
     public DateTime? FollowUpDate { get; set; }
 }
+// Deliberately narrower than OpdCreateRequest: PatientId, VisitType and
+// VisitDateUtc drive billing/emergency logic already applied when the visit
+// was created, so editing only touches the doctor/vitals/complaint/referral
+// fields a receptionist would realistically need to correct afterwards.
+public class OpdEditRequest
+{
+    public int DoctorId
+    {
+        get;
+        set;
+    }
+    public string? BloodPressure
+    {
+        get;
+        set;
+    }
+    public decimal? TemperatureC
+    {
+        get;
+        set;
+    }
+    public int? Pulse
+    {
+        get;
+        set;
+    }
+    public string? ChiefComplaint
+    {
+        get;
+        set;
+    }
+    public decimal? WeightKg
+    {
+        get;
+        set;
+    }
+    public decimal? HeightCm
+    {
+        get;
+        set;
+    }
+    public decimal? Spo2
+    {
+        get;
+        set;
+    }
+    public string MarketingSource { get; set; } = "Walk-in";
+    public int? ReferrerId { get; set; }
+}
 public class PaymentRequest
 {
     public decimal Amount

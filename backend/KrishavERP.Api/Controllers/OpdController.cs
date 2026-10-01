@@ -13,13 +13,16 @@ public class OpdController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly FollowUpService _followUpService;
+    private readonly IWebHostEnvironment _env;
 
     public OpdController(
         AppDbContext db,
-        FollowUpService followUpService)
+        FollowUpService followUpService,
+        IWebHostEnvironment env)
     {
         _db = db;
         _followUpService = followUpService;
+        _env = env;
     }
 
     [HttpGet]
@@ -223,6 +226,66 @@ public class OpdController : ControllerBase
         });
     }
 
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Edit(int id, OpdEditRequest request)
+    {
+        var visit = await _db.OpdVisits.FirstOrDefaultAsync(x => x.Id == id && !x.IsCancelled);
+        if (visit == null) return NotFound();
+
+        var doctor = await _db.Doctors.FindAsync(request.DoctorId);
+        if (doctor == null || !doctor.IsActive)
+            return BadRequest(new { message = "Please select a valid doctor." });
+
+        if (!await _db.PatientSources.AnyAsync(x => x.IsActive && x.Name == request.MarketingSource))
+        {
+            return BadRequest(new { message = "Please select a valid patient source." });
+        }
+
+        if (request.ReferrerId.HasValue &&
+            !await _db.Referrers.AnyAsync(x => x.Id == request.ReferrerId.Value && x.IsActive))
+        {
+            return BadRequest(new { message = "Selected referrer was not found." });
+        }
+
+        if (request.WeightKg is < 1 or > 500) return BadRequest(new { message = "Weight must be 1-500 kg." });
+        if (request.HeightCm is < 30 or > 250) return BadRequest(new { message = "Height must be 30-250 cm." });
+        if (request.Spo2 is < 50 or > 100) return BadRequest(new { message = "SpO2 must be 50-100%." });
+        if (request.Pulse is < 30 or > 250) return BadRequest(new { message = "Pulse must be 30-250 bpm." });
+
+        visit.DoctorId = request.DoctorId;
+        visit.BloodPressure = request.BloodPressure;
+        visit.TemperatureC = request.TemperatureC;
+        visit.Pulse = request.Pulse;
+        visit.ChiefComplaint = request.ChiefComplaint;
+        visit.WeightKg = request.WeightKg;
+        visit.HeightCm = request.HeightCm;
+        visit.Spo2 = request.Spo2;
+        visit.MarketingSource = request.MarketingSource;
+        visit.ReferrerId = request.ReferrerId;
+
+        await _db.SaveChangesAsync();
+        return Ok();
+    }
+
+    // Soft delete (matches Get()'s "where !visit.IsCancelled" filter) - a
+    // visit already billed keeps its own Bill row untouched, since bills are
+    // managed independently on the Bill page rather than cascaded from here.
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var visit = await _db.OpdVisits.FirstOrDefaultAsync(x => x.Id == id && !x.IsCancelled);
+        if (visit == null) return NotFound();
+
+        if (visit.ConvertedToIpd)
+        {
+            return BadRequest(new { message = "Cannot delete: this visit has already been converted to an IPD admission." });
+        }
+
+        visit.IsCancelled = true;
+        await _db.SaveChangesAsync();
+        return Ok();
+    }
+
     [HttpGet("{id:int}/prescription")]
     public async Task<IActionResult> Prescription(int id)
     {
@@ -235,8 +298,8 @@ public class OpdController : ControllerBase
             ? await _db.Doctors.FindAsync(visit.DoctorId.Value)
             : null;
 
-        string Setting(string name) => _db.AppSettings
-            .FirstOrDefault(x => x.Name == name && x.IsActive)?.Value ?? string.Empty;
+        string Setting(string name) => AssetVersioning.Stamp(_env, _db.AppSettings
+            .FirstOrDefault(x => x.Name == name && x.IsActive)?.Value ?? string.Empty);
 
         return Ok(new
         {

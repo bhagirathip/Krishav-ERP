@@ -17,13 +17,16 @@ public class AuthController : ControllerBase
 
     private readonly AppDbContext _db;
     private readonly IConfiguration _configuration;
+    private readonly IWebHostEnvironment _env;
 
     public AuthController(
         AppDbContext db,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IWebHostEnvironment env)
     {
         _db = db;
         _configuration = configuration;
+        _env = env;
     }
 
     [AllowAnonymous]
@@ -121,7 +124,7 @@ public class AuthController : ControllerBase
             displayName = user.DisplayName,
             designation = designation ?? "",
             permissions,
-            logo = logo?.Value ?? ""
+            logo = KrishavERP.Api.Services.AssetVersioning.Stamp(_env, logo?.Value ?? "")
         });
     }
 

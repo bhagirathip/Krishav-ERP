@@ -321,6 +321,9 @@ public class StaffController : ControllerBase
                 PaidAmount = payment?.PaidAmount ?? 0,
                 Outstanding = Math.Max(0, calc.PayableAmount - (payment?.PaidAmount ?? 0)),
                 PreviousOutstanding = previousOutstanding,
+                // What should actually be paid out this month: this
+                // month's salary plus whatever never got paid last month.
+                TotalPayable = calc.PayableAmount + previousOutstanding,
                 payment?.PaymentDate,
                 payment?.PaymentMode,
                 payment?.ReferenceNumber,

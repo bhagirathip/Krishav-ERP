@@ -13,11 +13,13 @@ public class LabController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly DiscountService _discounts;
+    private readonly IWebHostEnvironment _env;
 
-    public LabController(AppDbContext db, DiscountService discounts)
+    public LabController(AppDbContext db, DiscountService discounts, IWebHostEnvironment env)
     {
         _db = db;
         _discounts = discounts;
+        _env = env;
     }
 
     [HttpGet("tests")]
@@ -41,6 +43,7 @@ public class LabController : ControllerBase
         }
 
         request.Name = request.Name.Trim();
+        request.Group = string.IsNullOrWhiteSpace(request.Group) ? null : request.Group.Trim();
         request.IsActive = true;
         NormalizeComponents(request);
 
@@ -69,6 +72,7 @@ public class LabController : ControllerBase
         existing.Name = request.Name.Trim();
         existing.Price = request.Price;
         existing.Note = request.Note;
+        existing.Group = string.IsNullOrWhiteSpace(request.Group) ? null : request.Group.Trim();
         existing.SchemaJson = request.SchemaJson;
 
         _db.LabTestComponents.RemoveRange(existing.Components);
@@ -254,6 +258,39 @@ public class LabController : ControllerBase
             BillId = bill.Id,
             BillNumber = bill.BillNumber
         });
+    }
+
+    [HttpDelete("orders/{orderId:int}")]
+    public async Task<IActionResult> DeleteOrder(int orderId)
+    {
+        var order = await _db.LabOrders
+            .Include(x => x.Tests).ThenInclude(x => x.Results)
+            .FirstOrDefaultAsync(x => x.Id == orderId);
+        if (order == null) return NotFound();
+
+        if (order.BillId != null)
+        {
+            var bill = await _db.Bills.FirstOrDefaultAsync(x => x.Id == order.BillId.Value);
+            if (bill != null)
+            {
+                if (bill.PaidAmount > 0)
+                {
+                    return BadRequest(new { message = "Cannot delete: this order's bill already has payments recorded against it." });
+                }
+
+                bill.Status = "Deleted";
+            }
+        }
+
+        foreach (var orderTest in order.Tests)
+        {
+            _db.LabResults.RemoveRange(orderTest.Results);
+        }
+
+        _db.LabOrderTests.RemoveRange(order.Tests);
+        _db.LabOrders.Remove(order);
+        await _db.SaveChangesAsync();
+        return Ok();
     }
 
     [HttpGet("orders/{orderId:int}/tests")]
@@ -456,11 +493,12 @@ public class LabController : ControllerBase
 
         string Setting(string name)
         {
-            return _db.AppSettings
+            var value = _db.AppSettings
                 .FirstOrDefault(x =>
                     x.Name == name &&
                     x.IsActive)
                 ?.Value ?? "";
+            return AssetVersioning.Stamp(_env, value);
         }
 
         return Ok(new

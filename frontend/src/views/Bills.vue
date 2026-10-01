@@ -337,17 +337,56 @@ function printHtml(html) {
   };
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function printableNow() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// "Received ₹X as Cash and ₹Y as UPI, and ₹Z outstanding for payment." -
+// groups every payment on this bill by mode rather than just naming the
+// latest one, since a bill can be settled in more than one mode over time.
+function paymentSummarySentence(payments, outstanding) {
+  const byMode = {};
+  (payments || []).forEach(p => { byMode[p.mode || 'Unknown'] = (byMode[p.mode || 'Unknown'] || 0) + Number(p.amount || 0); });
+  const parts = Object.entries(byMode).map(([mode, amount]) => `₹${amount.toFixed(2)} as ${mode}`);
+  let sentence = parts.length ? `Received ${parts.join(' and ')}` : 'No payment received yet';
+  sentence += outstanding > 0.004 ? `, and ₹${outstanding.toFixed(2)} outstanding for payment.` : '.';
+  return sentence;
+}
+
 async function printBill(bill) {
   const { data } = await api.get(`/bills/${bill.id}/print`);
 
-  const itemRows = data.bill.items.map(item => `
+  const itemRows = data.bill.items.map((item, i) => `
     <tr>
+      <td class="no-col">${i + 1}</td>
       <td>${item.description}</td>
       <td>${item.quantity}</td>
       <td>₹${Number(item.unitPrice).toFixed(2)}</td>
       <td>₹${Number(item.discountAmount || 0).toFixed(2)}</td>
       <td>₹${Number(item.amount).toFixed(2)}</td>
     </tr>`).join('');
+
+  const totalDiscount = Number(data.totals.individualDiscount || 0) + Number(data.totals.bulkDiscount || 0);
+  const totalRow = `
+    <tr class="total-row">
+      <td></td>
+      <td><b>Total</b></td>
+      <td></td>
+      <td><b>₹${Number(data.totals.beforeDiscount).toFixed(2)}</b></td>
+      <td><b>₹${totalDiscount.toFixed(2)}</b></td>
+      <td><b>₹${Number(data.totals.afterDiscount).toFixed(2)}</b></td>
+    </tr>`;
 
   const header = data.header
     ? `<img class="header-image" src="${assetUrl(data.header)}">`
@@ -361,40 +400,36 @@ async function printBill(bill) {
     @page { size: A4; margin: 0; }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; width: 210mm; font-family: Arial, sans-serif; color: #000; }
-    .header-image { display: block; width: 210mm; height: 34mm; object-fit: fill; margin: 0; }
-    .content { padding: 8mm 12mm 12mm; }
-    .patient { border: 1px solid #333; padding: 9px; margin-bottom: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 13px; }
+    .header-image { display: block; width: 210mm; height: 42mm; object-fit: fill; margin: 0; }
+    .content { padding: 2mm 12mm 12mm; }
+    .patient-info { border-top: 2px solid #000; margin-bottom: 12px; }
+    .pi-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; padding: 6px 0; font-size: 13px; }
+    .pi-row:last-child { border-bottom: 2px solid #000; }
+    .pi-row b { display: inline-block; min-width: 110px; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { border: 1px solid #333; padding: 7px; text-align: left; font-size: 12px; }
-    .summary { width: 92mm; margin: 15px 0 0 auto; border: 1px solid #333; padding: 8px 12px; }
-    .summary div { display: flex; justify-content: space-between; padding: 4px 0; }
-    .summary .total { border-top: 1px solid #333; margin-top: 5px; padding-top: 8px; font-size: 16px; }
+    th, td { border: 0; padding: 7px; text-align: left; font-size: 12px; }
+    thead tr { border-bottom: 1.5px solid #000; }
+    .no-col { width: 12mm; text-align: center; }
+    .total-row td { border-top: 1.5px solid #000; padding-top: 10px; }
+    .payment-summary { margin-top: 15px; font-size: 15.5px; text-align: right; }
+    .signature-line { margin-top: 16mm; text-align: right; font-weight: 700; }
   </style>
 </head>
 <body>
   ${header}
   <div class="content">
-    <div class="patient">
-      <div><b>Patient:</b> ${data.patient?.name || data.bill.walkInPatientName || '-'}</div>
-      <div><b>Patient ID:</b> ${data.patient?.patientCode || '-'}</div>
-      <div><b>Age / Gender:</b> ${data.patient ? `${ageText(data.patient)} / ${data.patient.gender}` : '-'}</div>
-      <div><b>Phone:</b> ${data.patient?.phone || '-'}</div>
-      <div><b>Bill Type:</b> ${data.bill.billType}</div>
-      ${data.referrer ? `<div><b>Referrer:</b> ${data.referrer.name} (${data.referrer.referrerCode})</div>` : ``}
+    <div class="patient-info">
+      <div class="pi-row"><span><b>Patient:</b> ${data.patient?.name || data.bill.walkInPatientName || '-'}</span><span><b>Patient ID:</b> ${data.patient?.patientCode || '-'}</span></div>
+      <div class="pi-row"><span><b>Age / Gender:</b> ${data.patient ? `${ageText(data.patient)} / ${data.patient.gender}` : '-'}</span><span><b>Phone:</b> ${data.patient?.phone || '-'}</span></div>
+      <div class="pi-row"><span><b>Bill Type:</b> ${data.bill.billType}</span><span><b>Date &amp; Time:</b> ${printableNow()}</span></div>
+      ${data.referrer ? `<div class="pi-row"><span><b>Referrer:</b> ${data.referrer.name} (${data.referrer.referrerCode})</span><span></span></div>` : ''}
     </div>
     <table>
-      <tr><th>Description</th><th>Qty</th><th>Rate</th><th>Individual Discount</th><th>Amount</th></tr>
-      ${itemRows}
+      <thead><tr><th class="no-col">Sl No</th><th>Description</th><th>Qty</th><th>Rate</th><th>Discount</th><th>Amount</th></tr></thead>
+      <tbody>${itemRows}${totalRow}</tbody>
     </table>
-    <div class="summary">
-      <div><span>Before Discount</span><b>₹${Number(data.totals.beforeDiscount).toFixed(2)}</b></div>
-      <div><span>Individual Discount</span><b>₹${Number(data.totals.individualDiscount).toFixed(2)}</b></div>
-      <div><span>After Individual Discount</span><b>₹${Number(data.totals.afterIndividualDiscount).toFixed(2)}</b></div>
-      <div><span>Bulk Discount</span><b>₹${Number(data.totals.bulkDiscount).toFixed(2)}</b></div>
-      <div class="total"><span>After Discount</span><b>₹${Number(data.totals.afterDiscount).toFixed(2)}</b></div>
-      <div><span>Paid</span><b>₹${Number(data.totals.paid).toFixed(2)}</b></div>
-      <div><span>Outstanding</span><b>₹${Number(data.totals.outstanding).toFixed(2)}</b></div>
-    </div>
+    <div class="payment-summary">${escapeHtml(paymentSummarySentence(data.bill.payments, Number(data.totals.outstanding)))}</div>
+    <div class="signature-line">Authorized Signature</div>
   </div>
 </body>
 </html>`);
@@ -433,6 +468,7 @@ onMounted(load);
   <table class="table">
     <tr>
       <th class="sortable" @click="sortBy('billNumber')">Bill <span class="sort-indicator">{{ sortIndicator('billNumber') }}</span></th>
+      <th class="sortable" @click="sortBy('patientName')">Patient <span class="sort-indicator">{{ sortIndicator('patientName') }}</span></th>
       <th class="sortable" @click="sortBy('billType')">Type <span class="sort-indicator">{{ sortIndicator('billType') }}</span></th>
       <th class="sortable" @click="sortBy('referrerName')">Referrer <span class="sort-indicator">{{ sortIndicator('referrerName') }}</span></th>
       <th class="sortable" @click="sortBy('grossAmount')">Before Discount <span class="sort-indicator">{{ sortIndicator('grossAmount') }}</span></th>
@@ -445,6 +481,7 @@ onMounted(load);
     </tr>
     <tr v-for="bill in pagedRows" :key="bill.id">
       <td>{{ bill.billNumber }}</td>
+      <td>{{ bill.patientName || '-' }}</td>
       <td>{{ bill.billType }}</td>
       <td>{{ bill.referrerName || '-' }}</td>
       <td>₹{{ Number(bill.grossAmount).toFixed(2) }}</td>
