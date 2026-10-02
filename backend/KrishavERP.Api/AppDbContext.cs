@@ -42,6 +42,7 @@ public class AppDbContext : DbContext
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ReportCategory> ReportCategories => Set<ReportCategory>();
     public DbSet<DiscountType> DiscountTypes => Set<DiscountType>();
+    public DbSet<ServiceCharge> ServiceCharges => Set<ServiceCharge>();
     public DbSet<Referrer> Referrers => Set<Referrer>();
     public DbSet<ReferralPayout> ReferralPayouts => Set<ReferralPayout>();
     public DbSet<PatientFollowUp> PatientFollowUps => Set<PatientFollowUp>();
@@ -162,6 +163,8 @@ public class AppDbContext : DbContext
         b.Entity<PharmacySaleItem>().Property(x => x.UnitPrice).HasPrecision(18, 4);
         b.Entity<PharmacySaleItem>().Property(x => x.DiscountAmount).HasPrecision(18, 2);
         b.Entity<PharmacySaleItem>().Property(x => x.TotalAmount).HasPrecision(18, 2);
+        b.Entity<PharmacySaleItem>().Property(x => x.CgstPercent).HasPrecision(8, 2);
+        b.Entity<PharmacySaleItem>().Property(x => x.SgstPercent).HasPrecision(8, 2);
         b.Entity<PharmacyExpiryAction>().Property(x => x.Amount).HasPrecision(18, 2);
 
         b.Entity<PharmacyPurchaseInvoice>()

@@ -21,6 +21,7 @@ const outsideDoctorName = ref('');
 const walkInPatientName = ref('');
 const walkInPhone = ref('');
 const paymentMode = ref('Cash');
+const roundOff = ref(0);
 const sales = ref([]);
 const dayEndDate = ref(new Date().toISOString().slice(0, 10));
 const dayEnd = ref(null);
@@ -59,7 +60,7 @@ watch(patientId, value => {
 const totals = computed(() => {
   const gross = cart.value.reduce((sum, row) => sum + rowGross(row), 0);
   const discount = cart.value.reduce((sum, row) => sum + rowDiscount(row), 0);
-  return { gross, discount, net: gross - discount };
+  return { gross, discount, net: gross - discount + Number(roundOff.value || 0) };
 });
 
 async function load() {
@@ -171,6 +172,11 @@ async function createSale() {
     }
   }
 
+  if (roundOff.value < -9 || roundOff.value > 9) {
+    alert('Round off must be between -9 and 9.');
+    return;
+  }
+
   try {
     const { data } = await api.post('/pharmacy/sales', {
       patientId: patientId.value,
@@ -179,6 +185,7 @@ async function createSale() {
       walkInPatientName: patientId.value ? null : walkInPatientName.value,
       walkInPhone: patientId.value ? null : walkInPhone.value,
       paymentMode: paymentMode.value,
+      roundOff: roundOff.value,
       items: cart.value.map(x => ({
         purchaseItemId: x.purchaseItemId,
         unitType: x.unitType,
@@ -195,6 +202,7 @@ async function createSale() {
     outsideDoctorName.value = '';
     walkInPatientName.value = '';
     walkInPhone.value = '';
+    roundOff.value = 0;
     activeTab.value = 'summary';
     await searchInventory();
     await searchForBill();
@@ -216,17 +224,29 @@ async function saleData(row) {
 
 async function printSale(row) {
   const data = await saleData(row);
-  const itemRows = data.sale.items.map((item, index) => `
+  // MRP is already tax-inclusive - CGST/SGST here are a per-row breakdown of
+  // each item's own Total (per data.itemTax, computed server-side from its
+  // purchase-time CGST/SGST%), not an addition to it, so the patient pays
+  // the same Total either way.
+  const itemRows = data.sale.items.map((item, index) => {
+    const tax = data.itemTax.find(t => t.itemId === item.id);
+    return `
     <tr>
       <td class="no-col">${index + 1}</td>
       <td>${item.productName}</td>
+      <td>${item.hsn || '-'}</td>
       <td>${item.batchNo}</td>
       <td class="no-col">${item.quantity}</td>
       <td class="amount">₹${(Number(item.unitPrice) * Number(item.quantity)).toFixed(2)}</td>
       <td class="amount">₹${Number(item.discountAmount).toFixed(2)}</td>
+      <td class="amount">${Number(tax?.cgstPercent ?? 0).toFixed(1)}%</td>
+      <td class="amount">₹${Number(tax?.cgst ?? 0).toFixed(2)}</td>
+      <td class="amount">${Number(tax?.sgstPercent ?? 0).toFixed(1)}%</td>
+      <td class="amount">₹${Number(tax?.sgst ?? 0).toFixed(2)}</td>
       <td class="amount">₹${Number(item.totalAmount).toFixed(2)}</td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
+
   const saleDate = data.sale.saleDateUtc ? new Date(data.sale.saleDateUtc).toLocaleDateString() : '-';
   const frame = document.createElement('iframe');
   frame.style.cssText = 'position:fixed;width:0;height:0;border:0';
@@ -243,22 +263,44 @@ async function printSale(row) {
     .content{padding:3mm 6mm 6mm}
     .patient{border-top:1.5px solid #222;border-bottom:1.5px solid #222;padding:4px 0;margin-bottom:10px}
     .patient-row{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;padding:1.5px 0}
-    table{width:100%;border-collapse:collapse}
-    thead th{border-top:1.5px solid #222;border-bottom:1.5px solid #222;padding:5px 4px;text-align:left}
-    tbody td{padding:4px;border:0}
-    .no-col{width:9mm;text-align:center}
+    table{width:100%;border-collapse:collapse;font-size:9px}
+    thead th{border-top:1.5px solid #222;border-bottom:1.5px solid #222;padding:3px 2px;text-align:left}
+    thead tr:first-child th{border-bottom:0}
+    thead .sub-th{border-top:0;padding-top:0}
+    tbody td{padding:3px 2px;border:0}
+    .no-col{width:7mm;text-align:center}
     .amount{text-align:right}
     .total{border-top:1.5px solid #222;margin-top:6px;padding-top:6px;text-align:right;font-size:13px}
   </style></head><body>
     <div class="header">${data.header ? `<img src="${assetUrl(data.header)}">` : ''}</div>
     <div class="content">
       <div class="patient">
+        <div class="patient-row"><span><b>Bill No:</b> ${data.sale.saleNumber}</span><span><b>GST No:</b> ${data.gstNumber || '-'}</span></div>
         <div class="patient-row"><span><b>Patient:</b> ${data.patient?.name || data.sale.walkInPatientName || 'Walk-in'}</span><span><b>Phone:</b> ${data.patient?.phone || data.sale.walkInPhone || '-'}</span></div>
-        <div class="patient-row"><span><b>Doctor:</b> ${data.doctor?.name || data.sale.outsideDoctorName || '-'}</span><span><b>GST No:</b> ${data.gstNumber || '-'}</span></div>
-        <div class="patient-row"><span><b>Payment:</b> ${data.sale.paymentMode}</span><span><b>Date:</b> ${saleDate}</span></div>
+        <div class="patient-row"><span><b>Doctor:</b> ${data.doctor?.name || data.sale.outsideDoctorName || '-'}</span><span><b>Payment:</b> ${data.sale.paymentMode}</span></div>
+        <div class="patient-row"><span><b>Date:</b> ${saleDate}</span><span></span></div>
       </div>
       <table>
-        <thead><tr><th class="no-col">Sl</th><th>Product</th><th>Batch No</th><th class="no-col">Qty</th><th class="amount">Amount</th><th class="amount">Discount</th><th class="amount">Total</th></tr></thead>
+        <thead>
+          <tr>
+            <th class="no-col" rowspan="2">Sl</th>
+            <th rowspan="2">Product</th>
+            <th rowspan="2">HSN Code</th>
+            <th rowspan="2">Batch No</th>
+            <th class="no-col" rowspan="2">Qty</th>
+            <th class="amount" rowspan="2">Amount</th>
+            <th class="amount" rowspan="2">Discount</th>
+            <th class="amount" colspan="2">CGST</th>
+            <th class="amount" colspan="2">SGST</th>
+            <th class="amount" rowspan="2">Total</th>
+          </tr>
+          <tr>
+            <th class="amount sub-th">%</th>
+            <th class="amount sub-th">₹</th>
+            <th class="amount sub-th">%</th>
+            <th class="amount sub-th">₹</th>
+          </tr>
+        </thead>
         <tbody>${itemRows}</tbody>
       </table>
       <div class="total"><b>Total: ₹${Number(data.sale.totalAmount).toFixed(2)}</b></div>
@@ -393,7 +435,7 @@ onMounted(async () => {
       </tr>
     </table>
 
-    <div class="bill-total-box"><div><span>Before Discount</span><b>₹{{ totals.gross.toFixed(2) }}</b></div><div><span>Discount</span><b>₹{{ totals.discount.toFixed(2) }}</b></div><div class="grand"><span>Total</span><b>₹{{ totals.net.toFixed(2) }}</b></div></div>
+    <div class="bill-total-box"><div><span>Before Discount</span><b>₹{{ totals.gross.toFixed(2) }}</b></div><div><span>Discount</span><b>₹{{ totals.discount.toFixed(2) }}</b></div><div><span>Round Off (-9 to 9)</span><input v-model.number="roundOff" type="number" min="-9" max="9" step="1" style="width:80px;display:inline-block"></div><div class="grand"><span>Total</span><b>₹{{ totals.net.toFixed(2) }}</b></div></div>
     <div class="modal-actions"><button v-if="can('PHARMACY_SALES','add')" @click="createSale">Complete Sale</button></div>
   </div>
 

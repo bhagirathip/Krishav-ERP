@@ -238,6 +238,7 @@ onMounted(async () => {
       <div
         v-if="
           show('REPORT_EXECUTIVE') ||
+          show('GST_FILING') ||
           show('LAB_REPORT') ||
           show('PHARMACY_REPORT') ||
           show('STAFF_REPORT') ||
@@ -251,6 +252,7 @@ onMounted(async () => {
         </button>
         <div v-show="reportsOpen" class="submenu">
           <router-link v-if="show('REPORT_EXECUTIVE')" class="submenu-link" to="/reporting">Reporting</router-link>
+          <router-link v-if="show('GST_FILING')" class="submenu-link" to="/reporting/gst-filing">GST Filing</router-link>
           <router-link v-if="show('LAB_REPORT')" class="submenu-link" to="/lab/report">Lab Report</router-link>
           <router-link v-if="show('PHARMACY_REPORT')" class="submenu-link" to="/pharmacy/report">Pharmacy Report</router-link>
           <router-link v-if="show('STAFF_REPORT')" class="submenu-link" to="/staff/report">Staff Report</router-link>
@@ -265,7 +267,8 @@ onMounted(async () => {
           show('DISCOUNT') ||
           show('REFERRAL') ||
           show('PATIENT_SOURCE') ||
-          show('BILL_TYPE')
+          show('BILL_TYPE') ||
+          show('SERVICE_CHARGE')
         "
         class="menu-group collapsible-menu"
       >
@@ -325,6 +328,14 @@ onMounted(async () => {
             to="/discounts"
           >
             Discount Master
+          </router-link>
+
+          <router-link
+            v-if="show('SERVICE_CHARGE')"
+            class="submenu-link"
+            to="/service-charges"
+          >
+            Hospital Expense Charge Master
           </router-link>
         </div>
       </div>

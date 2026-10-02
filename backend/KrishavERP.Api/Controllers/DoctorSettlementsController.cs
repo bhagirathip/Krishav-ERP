@@ -63,6 +63,15 @@ public class DoctorSettlementsController : ControllerBase
             .Where(x => bookingIds.Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, x => x);
 
+        // A deleted consultation bill's settlement is removed as part of
+        // deleting the bill (see BillsController.Delete), but this is a
+        // safety net for any row from before that cleanup existed, or any
+        // other path that might soft-delete a bill - an owed amount
+        // shouldn't still show up for a bill that no longer exists.
+        rows = rows.Where(x => x.SourceType != "Consultation"
+            || !bills.TryGetValue(x.SourceId, out var sourceBill)
+            || sourceBill.Status != "Deleted").ToList();
+
         var patientIds = bills.Values.Where(x => x.PatientId.HasValue).Select(x => x.PatientId!.Value)
             .Concat(bookings.Values.Where(x => x.PatientId.HasValue).Select(x => x.PatientId!.Value))
             .Distinct().ToList();

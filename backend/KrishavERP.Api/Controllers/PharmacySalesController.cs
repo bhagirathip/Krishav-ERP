@@ -143,6 +143,11 @@ public class PharmacySalesController : ControllerBase
             return BadRequest(new { message = "Please select a valid payment mode." });
         }
 
+        if (request.RoundOff < -9 || request.RoundOff > 9)
+        {
+            return BadRequest(new { message = "Round off must be between -9 and 9." });
+        }
+
         if (request.PatientId.HasValue)
         {
             if (!await _db.Patients.AnyAsync(x => x.Id == request.PatientId.Value && !x.IsDeleted))
@@ -323,6 +328,8 @@ public class PharmacySalesController : ControllerBase
                 PurchaseItemId = stock.Id,
                 Manufacturer = stock.Manufacturer,
                 Hsn = stock.Hsn,
+                CgstPercent = stock.CgstPercent,
+                SgstPercent = stock.SgstPercent,
                 ProductName = stock.ProductName,
                 BatchNo = stock.BatchNo,
                 Packing = stock.Packing,
@@ -353,10 +360,11 @@ public class PharmacySalesController : ControllerBase
             });
         }
 
-        grandTotal = Math.Round(grandTotal, 2);
+        grandTotal = Math.Round(grandTotal, 2) + request.RoundOff;
         bill.GrossAmount = bill.Items.Sum(x => x.UnitPrice * x.Quantity);
         bill.DiscountAmount = 0;
         bill.DiscountPercent = 0;
+        bill.RoundOff = request.RoundOff;
         bill.NetAmount = grandTotal;
         bill.PaidAmount = request.IpdAdmissionId.HasValue ? 0 : grandTotal;
 
@@ -429,9 +437,27 @@ public class PharmacySalesController : ControllerBase
             .FirstOrDefaultAsync());
 
         var gstNumber = await _db.AppSettings
-            .Where(x => x.IsActive && x.Name == "GST Number")
+            .Where(x => x.IsActive && x.Name == "Pharmacy GST No")
             .Select(x => x.Value)
             .FirstOrDefaultAsync();
+
+        // MRP is retail-standard tax-inclusive, so the tax breakdown is
+        // extracted from each item's existing (already-discounted) total
+        // rather than added on top - the patient's total never changes.
+        // IGST isn't computed (this hospital bills intra-state only); the
+        // field still prints, just always zero.
+        decimal taxableTotal = 0, cgstTotal = 0, sgstTotal = 0;
+        var itemTax = sale.Items.Select(item =>
+        {
+            var rate = item.CgstPercent + item.SgstPercent;
+            var taxable = rate > 0 ? Math.Round(item.TotalAmount / (1 + rate / 100m), 2) : item.TotalAmount;
+            var cgst = Math.Round(taxable * item.CgstPercent / 100m, 2);
+            var sgst = Math.Round(taxable * item.SgstPercent / 100m, 2);
+            taxableTotal += taxable;
+            cgstTotal += cgst;
+            sgstTotal += sgst;
+            return new { itemId = item.Id, taxable, cgstPercent = item.CgstPercent, cgst, sgstPercent = item.SgstPercent, sgst };
+        }).ToList();
 
         return Ok(new
         {
@@ -439,7 +465,9 @@ public class PharmacySalesController : ControllerBase
             patient,
             doctor,
             header = header ?? "",
-            gstNumber = gstNumber ?? ""
+            gstNumber = gstNumber ?? "",
+            itemTax,
+            gstSummary = new { taxableTotal, cgstTotal, sgstTotal, igstTotal = 0m }
         });
     }
 

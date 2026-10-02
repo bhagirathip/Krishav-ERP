@@ -74,6 +74,7 @@ public class LabController : ControllerBase
         existing.Note = request.Note;
         existing.Group = string.IsNullOrWhiteSpace(request.Group) ? null : request.Group.Trim();
         existing.SchemaJson = request.SchemaJson;
+        existing.StaticTableJson = request.StaticTableJson;
 
         _db.LabTestComponents.RemoveRange(existing.Components);
         NormalizeComponents(request);
@@ -526,7 +527,7 @@ public class LabController : ControllerBase
         });
     }
 
-    private static string BuildResultSchema(LabTest test)
+    internal static string BuildResultSchema(LabTest test)
     {
         if (!string.IsNullOrWhiteSpace(test.SchemaJson))
         {

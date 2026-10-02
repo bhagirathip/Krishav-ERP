@@ -33,8 +33,8 @@ public class BillsController : ControllerBase
             .Include(x => x.Payments)
             .Where(x => x.Status != "Deleted");
 
-        query = status == "Paid"
-            ? query.Where(x => x.Status == "Paid")
+        query = status == "Paid" ? query.Where(x => x.Status == "Paid")
+            : status == "All" ? query
             : query.Where(x => x.Status != "Paid");
 
         if (from.HasValue) query = query.Where(x => x.BillDate >= from.Value.Date);
@@ -70,6 +70,7 @@ public class BillsController : ControllerBase
             bill.RoundOff,
             bill.NetAmount,
             bill.PaidAmount,
+            RefundedAmount = bill.Payments.Where(p => p.Amount < 0).Sum(p => -p.Amount),
             bill.Status,
             bill.CreatedAtUtc,
             bill.BillDate,
@@ -79,7 +80,7 @@ public class BillsController : ControllerBase
     }
 
     [HttpGet("catalog")]
-    public async Task<IActionResult> GetCatalog([FromQuery] string type)
+    public async Task<IActionResult> GetCatalog([FromQuery] string type, [FromQuery] int? doctorId)
     {
         if (type.Equals("Lab", StringComparison.OrdinalIgnoreCase))
         {
@@ -92,21 +93,49 @@ public class BillsController : ControllerBase
             }).ToListAsync());
         }
 
-        if (type.Equals("OPD", StringComparison.OrdinalIgnoreCase) ||
-            type.Equals("Emergency", StringComparison.OrdinalIgnoreCase))
+        if (type.Equals("Pharmacy", StringComparison.OrdinalIgnoreCase))
         {
-            var settings = await _db.AppSettings
-                .Where(x => x.IsActive && x.Type == "Billing" && (x.Name == "Emergency Rate" || x.Name == "Hospital Charge"))
+            var pharmacyItems = await _db.PharmacyPurchaseItems
+                .Where(x => x.RemainingTablets > 0 && x.ExpiryDate.Date >= DateTime.Today &&
+                    x.PurchaseInvoice != null && !x.PurchaseInvoice.IsDeleted)
+                .GroupBy(x => new { x.ProductName, x.Mrp })
+                .Select(g => new
+                {
+                    Id = g.Min(x => x.Id),
+                    Label = g.Key.ProductName,
+                    Price = g.Key.Mrp,
+                    ReferenceType = "PharmacyPurchaseItem"
+                })
                 .ToListAsync();
 
-            return Ok(settings.Select(x =>
-            {
-                var price = decimal.TryParse(x.Value, out var parsedValue) ? parsedValue : 0m;
-                return new { x.Id, Label = x.Name, Price = price, ReferenceType = "Setting" };
-            }).ToList());
+            return Ok(pharmacyItems.OrderBy(x => x.Label).ToList());
         }
 
-        return Ok(Array.Empty<object>());
+        // Every other bill type (OPD, Emergency, Dental, IPD, OT, Dressing, ...)
+        // pulls from the Hospital Expense Charge master, filtered to charges
+        // tagged for this specific bill type.
+        var charges = await _db.ServiceCharges
+            .Where(x => x.IsActive && x.BillType == type)
+            .OrderBy(x => x.Name)
+            .Select(x => new { x.Id, Label = x.Name, x.Price, ReferenceType = "ServiceCharge" })
+            .ToListAsync();
+
+        // When a doctor is picked on an OPD/Emergency bill, offer their own
+        // consultation charge (from the Doctor master) as a catalog entry
+        // too - a negative Id keeps it from ever colliding with a real
+        // ServiceCharge's auto-increment Id.
+        if (doctorId.HasValue &&
+            (type.Equals("OPD", StringComparison.OrdinalIgnoreCase) || type.Equals("Emergency", StringComparison.OrdinalIgnoreCase)))
+        {
+            var doctor = await _db.Doctors.FindAsync(doctorId.Value);
+            if (doctor != null && doctor.IsActive)
+            {
+                var consultationEntry = new { Id = -doctor.Id, Label = $"Consultation - {doctor.Name}", Price = doctor.ConsultationCharge, ReferenceType = "DoctorConsultation" };
+                return Ok(new[] { consultationEntry }.Concat(charges).ToList());
+            }
+        }
+
+        return Ok(charges);
     }
 
     [HttpPost]
@@ -148,8 +177,6 @@ public class BillsController : ControllerBase
         {
             var calculated = await CalculateAsync(request.Items, request.BulkDiscountTypeId);
             var roundedNet = calculated.Net + request.RoundOff;
-            if (roundedNet < bill.PaidAmount)
-                return BadRequest(new { message = "Edited bill total cannot be lower than the amount already paid." });
 
             _db.BillItems.RemoveRange(bill.Items);
             var patient = request.PatientId.HasValue ? await _db.Patients.FindAsync(request.PatientId.Value) : null;
@@ -166,11 +193,128 @@ public class BillsController : ControllerBase
             bill.BulkDiscountName = calculated.Bulk.Name;
             bill.RoundOff = request.RoundOff;
             bill.NetAmount = roundedNet;
-            bill.Status = bill.PaidAmount >= bill.NetAmount ? "Paid" : bill.PaidAmount > 0 ? "Partially Paid" : "Unpaid";
 
             foreach (var item in calculated.Items) bill.Items.Add(item);
+
+            // If this is a Lab bill with a properly linked LabOrder (created
+            // via LabController.CreateOrder, not an ad-hoc Lab-type bill with
+            // no lab-side rows at all), keep that order's tests in sync with
+            // whatever the edited bill's lines now reference - e.g. swapping
+            // which test is billed should show the new test on the lab
+            // result screen, not the old one.
+            if (bill.BillType.Equals("Lab", StringComparison.OrdinalIgnoreCase))
+            {
+                var labOrder = await _db.LabOrders.Include(x => x.Tests).FirstOrDefaultAsync(x => x.BillId == id);
+                if (labOrder != null)
+                {
+                    var newTestLines = calculated.Items
+                        .Where(x => x.ReferenceType == "LabTest" && x.ReferenceId.HasValue)
+                        .ToList();
+                    var newTestIds = newTestLines.Select(x => x.ReferenceId!.Value).ToHashSet();
+
+                    var toRemove = labOrder.Tests.Where(t => !newTestIds.Contains(t.LabTestId)).ToList();
+                    foreach (var orderTest in toRemove)
+                    {
+                        _db.LabResults.RemoveRange(_db.LabResults.Where(r => r.LabOrderTestId == orderTest.Id));
+                        _db.LabOrderTests.Remove(orderTest);
+                    }
+
+                    var existingTestIds = labOrder.Tests.Select(t => t.LabTestId).ToHashSet();
+                    foreach (var line in newTestLines.Where(x => !existingTestIds.Contains(x.ReferenceId!.Value)))
+                    {
+                        var test = await _db.LabTests.Include(x => x.Components).FirstOrDefaultAsync(x => x.Id == line.ReferenceId!.Value);
+                        if (test == null) continue;
+
+                        var orderTest = new LabOrderTest
+                        {
+                            LabOrderId = labOrder.Id,
+                            LabTestId = test.Id,
+                            UnitPrice = line.UnitPrice,
+                            DiscountTypeId = line.DiscountTypeId,
+                            DiscountName = line.DiscountName,
+                            DiscountMode = line.DiscountMode,
+                            DiscountValue = line.DiscountValue,
+                            DiscountAmount = line.DiscountAmount,
+                            NetAmount = line.Amount,
+                            ResultSchemaJson = LabController.BuildResultSchema(test)
+                        };
+                        _db.LabOrderTests.Add(orderTest);
+                        await _db.SaveChangesAsync();
+
+                        foreach (var component in test.Components)
+                        {
+                            _db.LabResults.Add(new LabResult
+                            {
+                                LabOrderTestId = orderTest.Id,
+                                LabTestComponentId = component.Id,
+                                ComponentName = component.Name,
+                                RangeText = component.RangeText,
+                                Unit = component.Unit,
+                                ResultValue = component.DefaultValue
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Editing an already-paid bill down to a lower total (e.g. an item
+            // was removed) doesn't block the edit - it immediately records the
+            // excess as a refund (a negative Payment, same table every revenue
+            // report already sums from, so the refunded amount nets itself out
+            // everywhere automatically) and settles the bill back to Paid.
+            decimal refundAmount = 0;
+            if (roundedNet < bill.PaidAmount)
+            {
+                refundAmount = bill.PaidAmount - roundedNet;
+                var lastMode = await _db.Payments
+                    .Where(p => p.BillId == id)
+                    .OrderByDescending(p => p.PaidAtUtc)
+                    .Select(p => p.Mode)
+                    .FirstOrDefaultAsync() ?? "Cash";
+                _db.Payments.Add(new Payment
+                {
+                    BillId = id,
+                    Amount = -refundAmount,
+                    Mode = lastMode,
+                    Reference = "Refund - bill amount reduced on edit",
+                    PaidAtUtc = DateTime.Now
+                });
+                bill.PaidAmount -= refundAmount;
+            }
+
+            bill.Status = bill.PaidAmount >= bill.NetAmount ? "Paid" : bill.PaidAmount > 0 ? "Partially Paid" : "Unpaid";
+
+            // An OPD/Emergency consultation bill's settlement row (created at
+            // bill-creation time) doesn't automatically follow a later doctor
+            // change or amount change - resync it here, unless the doctor has
+            // already been paid out for it (that payment history is left alone).
+            var settlement = await _db.DoctorSettlements
+                .FirstOrDefaultAsync(x => x.SourceType == "Consultation" && x.SourceId == id && x.PaidAmount == 0);
+            var editedConsultationItem = calculated.Items.FirstOrDefault(x => x.ReferenceType == "DoctorConsultation");
+            if (settlement != null)
+            {
+                if (bill.DoctorId.HasValue) settlement.DoctorId = bill.DoctorId.Value;
+                if (editedConsultationItem != null) settlement.PayableAmount = editedConsultationItem.Amount;
+                settlement.UpdatedAtUtc = DateTime.UtcNow;
+            }
+            else if (editedConsultationItem != null && bill.DoctorId.HasValue)
+            {
+                // A consultation line was added where there was none before
+                // (and so no settlement row existed yet) - create one now,
+                // same as a brand-new consultation bill would.
+                _db.DoctorSettlements.Add(new DoctorSettlement
+                {
+                    DoctorId = bill.DoctorId.Value,
+                    SourceType = "Consultation",
+                    SourceId = bill.Id,
+                    Description = $"{bill.BillType} consultation · {bill.BillNumber}",
+                    PayableAmount = editedConsultationItem.Amount,
+                    EarnedDate = bill.BillDate.Date
+                });
+            }
+
             await _db.SaveChangesAsync();
-            return Ok(bill);
+            return Ok(new { bill, refundAmount });
         }
         catch (InvalidOperationException ex)
         {
@@ -185,6 +329,17 @@ public class BillsController : ControllerBase
         if (bill == null) return NotFound();
         if (bill.PaidAmount > 0) return BadRequest(new { message = "A bill with payment history cannot be deleted." });
         bill.Status = "Deleted";
+
+        // An OPD/Emergency consultation bill earns the consulting doctor a
+        // settlement row at creation time (OpdController/PatientsController).
+        // Once the bill is gone, that payable shouldn't still show up owed -
+        // unless the doctor was already settled for it, in which case that
+        // payment history is left alone rather than silently erased.
+        var settlements = await _db.DoctorSettlements
+            .Where(x => x.SourceType == "Consultation" && x.SourceId == id && x.PaidAmount == 0)
+            .ToListAsync();
+        if (settlements.Count > 0) _db.DoctorSettlements.RemoveRange(settlements);
+
         await _db.SaveChangesAsync();
         return Ok();
     }
@@ -206,12 +361,29 @@ public class BillsController : ControllerBase
             ? Setting("Lab Header")
             : bill.BillType.Equals("Pharmacy", StringComparison.OrdinalIgnoreCase) ? Setting("Pharmacy Header") : Setting("OPD Header");
 
+        // The bill amount is treated as already tax-inclusive (the GST rate
+        // defaults to 0/exempt, per how this hospital's non-pharmacy billing
+        // works today), so GST is extracted from the existing NetAmount as a
+        // breakdown rather than added on top - the patient's total never
+        // changes here. IGST isn't computed (intra-state billing only); the
+        // field still prints, just always zero.
+        var hsnNo = Setting("Bill HSN No");
+        var hospitalGstNo = Setting("Hospital GST No");
+        decimal.TryParse(Setting("Bill GST Rate"), out var gstRate);
+        var taxableValue = gstRate > 0 ? Math.Round(bill.NetAmount / (1 + gstRate / 100m), 2) : bill.NetAmount;
+        var cgstRate = gstRate / 2;
+        var sgstRate = gstRate / 2;
+        var cgstAmount = Math.Round(taxableValue * cgstRate / 100m, 2);
+        var sgstAmount = Math.Round(taxableValue * sgstRate / 100m, 2);
+
         return Ok(new
         {
             bill,
             patient,
             referrer,
             header,
+            hsnNo,
+            hospitalGstNo,
             totals = new
             {
                 BeforeDiscount = beforeDiscount,
@@ -221,6 +393,16 @@ public class BillsController : ControllerBase
                 AfterDiscount = bill.NetAmount,
                 Paid = bill.PaidAmount,
                 Outstanding = bill.NetAmount - bill.PaidAmount
+            },
+            gstSummary = new
+            {
+                TaxableValue = taxableValue,
+                CgstRate = cgstRate,
+                CgstAmount = cgstAmount,
+                SgstRate = sgstRate,
+                SgstAmount = sgstAmount,
+                IgstRate = 0m,
+                IgstAmount = 0m
             }
         });
     }
@@ -268,6 +450,25 @@ public class BillsController : ControllerBase
         _db.Bills.Add(bill);
         await _db.SaveChangesAsync();
         bill.BillNumber = $"BILL-{DateTime.Now:yyyyMMdd}-{bill.Id:000000}";
+
+        // A bill whose Description catalog included "Consultation - Dr. X"
+        // earns the doctor a settlement row here, same as the dedicated OPD
+        // visit/registration flows already do - this generic Create Bill
+        // path just hadn't been wired up to do that yet.
+        var consultationItem = bill.Items.FirstOrDefault(x => x.ReferenceType == "DoctorConsultation");
+        if (consultationItem != null && bill.DoctorId.HasValue)
+        {
+            _db.DoctorSettlements.Add(new DoctorSettlement
+            {
+                DoctorId = bill.DoctorId.Value,
+                SourceType = "Consultation",
+                SourceId = bill.Id,
+                Description = $"{bill.BillType} consultation · {bill.BillNumber}",
+                PayableAmount = consultationItem.Amount,
+                EarnedDate = bill.BillDate.Date
+            });
+        }
+
         await _db.SaveChangesAsync();
         return bill;
     }

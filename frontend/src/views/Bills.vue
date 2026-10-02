@@ -114,11 +114,11 @@ async function load() {
 
 async function loadCatalog() {
   catalog.value = (await api.get('/bills/catalog', {
-    params: { type: form.value.billType }
+    params: { type: form.value.billType, doctorId: form.value.doctorId || undefined }
   })).data;
 }
 
-watch(() => form.value.billType, loadCatalog);
+watch(() => [form.value.billType, form.value.doctorId], loadCatalog);
 
 async function changeTab(value) {
   tab.value = value;
@@ -252,6 +252,10 @@ function currentOutstanding() {
   return Math.max(0, finalAmount() - currentPaid());
 }
 
+function currentReturned() {
+  return Math.max(0, currentPaid() - finalAmount());
+}
+
 async function save() {
   errors.value = [];
 
@@ -263,15 +267,15 @@ async function save() {
   if (form.value.roundOff < -9 || form.value.roundOff > 9) {
     errors.value.push('Round off must be between -9 and 9.');
   }
-  if (finalAmount() < currentPaid()) {
-    errors.value.push('Final amount cannot be lower than amount already paid.');
-  }
 
   if (errors.value.length) return;
 
   try {
     if (editing.value) {
-      await api.put('/bills/' + editing.value.id, form.value);
+      const { data } = await api.put('/bills/' + editing.value.id, form.value);
+      if (data.refundAmount > 0) {
+        alert(`The edited total is ₹${Number(data.refundAmount).toFixed(2)} less than what was already paid - this amount has been recorded as returned to the patient.`);
+      }
     } else {
       await api.post('/bills', form.value);
     }
@@ -364,6 +368,15 @@ function paymentSummarySentence(payments, outstanding) {
   return sentence;
 }
 
+// Grid column: the mode(s) a Paid bill was actually settled in (e.g. "Cash",
+// or "Cash, UPI" if paid across more than one mode) - blank until a bill is
+// fully Paid, since a Partial/Unpaid bill's payment history isn't final yet.
+function paymentModesText(bill) {
+  if (bill.status !== 'Paid' || !bill.payments?.length) return '-';
+  const modes = [...new Set(bill.payments.map(p => p.mode))];
+  return modes.join(', ');
+}
+
 async function printBill(bill) {
   const { data } = await api.get(`/bills/${bill.id}/print`);
 
@@ -371,6 +384,7 @@ async function printBill(bill) {
     <tr>
       <td class="no-col">${i + 1}</td>
       <td>${item.description}</td>
+      <td>${data.hsnNo || '-'}</td>
       <td>${item.quantity}</td>
       <td>₹${Number(item.unitPrice).toFixed(2)}</td>
       <td>₹${Number(item.discountAmount || 0).toFixed(2)}</td>
@@ -383,6 +397,7 @@ async function printBill(bill) {
       <td></td>
       <td><b>Total</b></td>
       <td></td>
+      <td></td>
       <td><b>₹${Number(data.totals.beforeDiscount).toFixed(2)}</b></td>
       <td><b>₹${totalDiscount.toFixed(2)}</b></td>
       <td><b>₹${Number(data.totals.afterDiscount).toFixed(2)}</b></td>
@@ -391,6 +406,15 @@ async function printBill(bill) {
   const header = data.header
     ? `<img class="header-image" src="${assetUrl(data.header)}">`
     : '';
+
+  // The bill amount is already treated as tax-inclusive (GST rate defaults
+  // to 0/exempt) - this is a breakdown of data.totals.afterDiscount, not an
+  // addition to it, so the Total row above is unaffected either way. HSN is
+  // shown as its own column on every line instead of once here.
+  const gst = data.gstSummary;
+  const gstRows = `
+    <div class="pi-row"><span><b>Taxable Value:</b> ₹${Number(gst.taxableValue).toFixed(2)}</span><span><b>CGST (${Number(gst.cgstRate)}%):</b> ₹${Number(gst.cgstAmount).toFixed(2)}</span></div>
+    <div class="pi-row"><span><b>SGST (${Number(gst.sgstRate)}%):</b> ₹${Number(gst.sgstAmount).toFixed(2)}</span><span><b>IGST (${Number(gst.igstRate)}%):</b> ₹${Number(gst.igstAmount).toFixed(2)}</span></div>`;
 
   printHtml(`<!doctype html>
 <html>
@@ -411,6 +435,7 @@ async function printBill(bill) {
     thead tr { border-bottom: 1.5px solid #000; }
     .no-col { width: 12mm; text-align: center; }
     .total-row td { border-top: 1.5px solid #000; padding-top: 10px; }
+    .gst-summary { border-top: 1px solid #000; margin-top: 4px; padding-top: 4px; }
     .payment-summary { margin-top: 15px; font-size: 15.5px; text-align: right; }
     .signature-line { margin-top: 16mm; text-align: right; font-weight: 700; }
   </style>
@@ -419,15 +444,17 @@ async function printBill(bill) {
   ${header}
   <div class="content">
     <div class="patient-info">
+      <div class="pi-row"><span><b>Bill No:</b> ${data.bill.billNumber}</span><span><b>GST No:</b> ${data.hospitalGstNo || '-'}</span></div>
       <div class="pi-row"><span><b>Patient:</b> ${data.patient?.name || data.bill.walkInPatientName || '-'}</span><span><b>Patient ID:</b> ${data.patient?.patientCode || '-'}</span></div>
       <div class="pi-row"><span><b>Age / Gender:</b> ${data.patient ? `${ageText(data.patient)} / ${data.patient.gender}` : '-'}</span><span><b>Phone:</b> ${data.patient?.phone || '-'}</span></div>
       <div class="pi-row"><span><b>Bill Type:</b> ${data.bill.billType}</span><span><b>Date &amp; Time:</b> ${printableNow()}</span></div>
       ${data.referrer ? `<div class="pi-row"><span><b>Referrer:</b> ${data.referrer.name} (${data.referrer.referrerCode})</span><span></span></div>` : ''}
     </div>
     <table>
-      <thead><tr><th class="no-col">Sl No</th><th>Description</th><th>Qty</th><th>Rate</th><th>Discount</th><th>Amount</th></tr></thead>
+      <thead><tr><th class="no-col">Sl No</th><th>Description</th><th>HSN Code</th><th>Qty</th><th>Rate</th><th>Discount</th><th>Amount</th></tr></thead>
       <tbody>${itemRows}${totalRow}</tbody>
     </table>
+    <div class="gst-summary">${gstRows}</div>
     <div class="payment-summary">${escapeHtml(paymentSummarySentence(data.bill.payments, Number(data.totals.outstanding)))}</div>
     <div class="signature-line">Authorized Signature</div>
   </div>
@@ -445,6 +472,7 @@ onMounted(load);
     <button v-if="can('BILL', 'add')" @click="newBill">+ Create Bill</button>
     <button :class="tab === 'Unpaid' ? '' : 'secondary'" @click="changeTab('Unpaid')">Unpaid Bill</button>
     <button :class="tab === 'Paid' ? '' : 'secondary'" @click="changeTab('Paid')">Paid Bill</button>
+    <button :class="tab === 'All' ? '' : 'secondary'" @click="changeTab('All')">All Bills</button>
   </div>
 
   <div class="toolbar report-filter">
@@ -477,6 +505,8 @@ onMounted(load);
       <th class="sortable" @click="sortBy('paidAmount')">Paid <span class="sort-indicator">{{ sortIndicator('paidAmount') }}</span></th>
       <th>Outstanding</th>
       <th class="sortable" @click="sortBy('status')">Status <span class="sort-indicator">{{ sortIndicator('status') }}</span></th>
+      <th>Mode</th>
+      <th>Returned</th>
       <th></th>
     </tr>
     <tr v-for="bill in pagedRows" :key="bill.id">
@@ -490,6 +520,8 @@ onMounted(load);
       <td>₹{{ Number(bill.paidAmount).toFixed(2) }}</td>
       <td>₹{{ Number(bill.netAmount - bill.paidAmount).toFixed(2) }}</td>
       <td>{{ bill.status }}</td>
+      <td>{{ paymentModesText(bill) }}</td>
+      <td>{{ Number(bill.refundedAmount || 0) > 0 ? '₹' + Number(bill.refundedAmount).toFixed(2) : '-' }}</td>
       <td class="actions">
         <button @click="printBill(bill)">Print</button>
         <button v-if="can('BILL', 'edit')" @click="editBill(bill)">Edit</button>
@@ -622,6 +654,7 @@ onMounted(load);
         <div class="grand"><span>Final Amount</span><b>₹{{ finalAmount().toFixed(2) }}</b></div>
         <div><span>Paid</span><b>₹{{ currentPaid().toFixed(2) }}</b></div>
         <div><span>Outstanding</span><b>₹{{ currentOutstanding().toFixed(2) }}</b></div>
+        <div v-if="currentReturned() > 0"><span>Returned to Patient</span><b>₹{{ currentReturned().toFixed(2) }}</b></div>
       </div>
 
       <div class="modal-actions">

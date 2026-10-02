@@ -96,6 +96,7 @@ async function assign(user, event) {
 }
 
 async function del(role) {
+  if (!confirm(`Delete role "${role.name}"?`)) return;
   await api.delete('/roles/' + role.id);
   await load();
 }

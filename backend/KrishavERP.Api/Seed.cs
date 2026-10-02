@@ -25,7 +25,7 @@ public static class DbSeeder
         "DASHBOARD","DOCTOR","PATIENT","OPD","BILL","IPD","OT",
         "PHARMACY_DISTRIBUTOR","PHARMACY_PURCHASE","PHARMACY_SALES","PHARMACY_EXPIRY","PHARMACY_STOCK_REPORT","PHARMACY_REPORT",
         "LAB_MASTER","LAB_PATIENT_TESTS","LAB_CBC_ANALYZER","LAB_REPORT",
-        "SETTINGS","BED","ROLE","PERMISSION","REPORT_EXECUTIVE","DISCOUNT","REFERRAL","PAYOUT","FOLLOWUP","PATIENT_SOURCE","BILL_TYPE",
+        "SETTINGS","BED","ROLE","PERMISSION","REPORT_EXECUTIVE","GST_FILING","DISCOUNT","REFERRAL","PAYOUT","FOLLOWUP","PATIENT_SOURCE","BILL_TYPE","SERVICE_CHARGE",
         "STAFF_MASTER","STAFF_DESIGNATION","STAFF_ATTENDANCE","STAFF_SALARY","STAFF_REPORT",
         "EXPENSE_DAILY","EXPENSE_LAB","EXPENSE_PHARMACY","EXPENSE_DOCTOR_SETTLEMENT","EXPENSE_REPORT"
     }
@@ -49,7 +49,15 @@ public static class DbSeeder
         if(!db.AppUsers.Any())db.AppUsers.Add(new AppUser{Username="admin",DisplayName="Administrator",PasswordHash=PasswordUtil.Hash("Admin@123"),RoleId=adminRole.Id});
         if(!db.AppSettings.Any())
         {
-            db.AppSettings.AddRange(                 new AppSetting{Name="Hospital Name",Value="Krishav Health Care",Type="Branding"},                 new AppSetting{Name="Hospital Address",Value="Housing Board, J.K. Pur Road, Rayagada - 765001, Odisha",Type="Branding"},                 new AppSetting{Name="Hospital Phone",Value="8001011818 / 9002561818",Type="Branding"},                 new AppSetting{Name="Hospital Logo",Value="",Type="Branding"},                 new AppSetting{Name="OPD Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signature",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signatory Name",Value="",Type="Generic"},                 new AppSetting{Name="Lab Signatory Qualification",Value="",Type="Generic"},                 new AppSetting{Name="Pharmacy Header",Value="",Type="Branding"},                 new AppSetting{Name="Blank Prescription Header",Value="",Type="Branding"},                 new AppSetting{Name="Bank Name",Value="",Type="Generic"},                 new AppSetting{Name="Bank Account Number",Value="",Type="Generic"},                 new AppSetting{Name="Hospital Charge",Value="100",Type="Billing"},                 new AppSetting{Name="Emergency Rate",Value="500",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Cash",Value="300",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Insurance",Value="400",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Ayushman",Value="350",Type="Billing"}             );
+            db.AppSettings.AddRange(                 new AppSetting{Name="Hospital Name",Value="Krishav Health Care",Type="Branding"},                 new AppSetting{Name="Hospital Address",Value="Housing Board, J.K. Pur Road, Rayagada - 765001, Odisha",Type="Branding"},                 new AppSetting{Name="Hospital Phone",Value="8001011818 / 9002561818",Type="Branding"},                 new AppSetting{Name="Hospital Logo",Value="",Type="Branding"},                 new AppSetting{Name="OPD Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signature",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signatory Name",Value="",Type="Generic"},                 new AppSetting{Name="Lab Signatory Qualification",Value="",Type="Generic"},                 new AppSetting{Name="Pharmacy Header",Value="",Type="Branding"},                 new AppSetting{Name="Blank Prescription Header",Value="",Type="Branding"},                 new AppSetting{Name="Bank Name",Value="",Type="Generic"},                 new AppSetting{Name="Bank Account Number",Value="",Type="Generic"},                 new AppSetting{Name="Hospital Charge",Value="100",Type="Billing"},                 new AppSetting{Name="Emergency Rate",Value="500",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Cash",Value="300",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Insurance",Value="400",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Ayushman",Value="350",Type="Billing"},                 new AppSetting{Name="Hospital GST No",Value="",Type="Billing"},                 new AppSetting{Name="Pharmacy GST No",Value="",Type="Billing"},                 new AppSetting{Name="Bill HSN No",Value="9993",Type="Billing"},                 new AppSetting{Name="Bill GST Rate",Value="0",Type="Billing"}             );
+        }
+        if(!db.ServiceCharges.Any())
+        {
+            db.ServiceCharges.AddRange(
+                new ServiceCharge{Name="Emergency Charge",Price=500,BillType="Emergency"},
+                new ServiceCharge{Name="Injection Charge",Price=0,BillType="OPD"},
+                new ServiceCharge{Name="Hospital Registration",Price=100,BillType="OPD"}
+            );
         }
         if(!db.DocumentCategories.Any())
         {

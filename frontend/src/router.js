@@ -20,6 +20,7 @@ import Beds from './views/Beds.vue';
 import RoleManagement from './views/RoleManagement.vue';
 import Permissions from './views/Permissions.vue';
 import Reporting from './views/Reporting.vue';
+import GstFiling from './views/GstFiling.vue';
 import Discounts from './views/Discounts.vue';
 import Referrals from './views/Referrals.vue';
 import Payouts from './views/Payouts.vue';
@@ -38,6 +39,7 @@ import LabReport from './views/LabReport.vue';
 import PharmacyReport from './views/PharmacyReport.vue';
 import PharmacyStockReport from './views/PharmacyStockReport.vue';
 import CbcAnalyzerResults from './views/CbcAnalyzerResults.vue';
+import ServiceCharges from './views/ServiceCharges.vue';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -69,7 +71,9 @@ const router = createRouter({
     { path: '/designations', component: RoleManagement, meta: { module: 'ROLE' } },
     { path: '/permissions', component: Permissions, meta: { module: 'PERMISSION' } },
     { path: '/reporting', component: Reporting, meta: { module: 'REPORT_EXECUTIVE' } },
+    { path: '/reporting/gst-filing', component: GstFiling, meta: { module: 'GST_FILING' } },
     { path: '/discounts', component: Discounts, meta: { module: 'DISCOUNT' } },
+    { path: '/service-charges', component: ServiceCharges, meta: { module: 'SERVICE_CHARGE' } },
     { path: '/referrals', component: Referrals, meta: { module: 'REFERRAL' } },
     { path: '/payouts', component: Payouts, meta: { module: 'PAYOUT' } },
     { path: '/followups', component: FollowUps, meta: { module: 'FOLLOWUP' } },

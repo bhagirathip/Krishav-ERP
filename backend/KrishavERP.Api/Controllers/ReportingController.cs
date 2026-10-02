@@ -288,6 +288,81 @@ public class ReportingController : ControllerBase
         });
     }
 
+    [HttpGet("payment-mode-by-bill-type")]
+    public async Task<IActionResult> GetPaymentModeByBillType(
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to)
+    {
+        var start = (from ?? DateTime.Today).Date;
+        var end = (to ?? DateTime.Today).Date.AddDays(1);
+
+        var payments =
+            await (from payment in _db.Payments
+                   join bill in _db.Bills on payment.BillId equals bill.Id
+                   where bill.Status != "Deleted" &&
+                         payment.PaidAtUtc >= start &&
+                         payment.PaidAtUtc < end
+                   select new { bill.Id, bill.BillType, bill.NetAmount, payment.Mode, payment.Amount })
+                  .ToListAsync();
+
+        // For OPD bills specifically, split each payment between the
+        // doctor's own consultation charge and any other OPD charge on the
+        // same bill (hospital/registration charge etc.), pro-rated by each
+        // charge's share of the bill's net amount - payments aren't tied to
+        // individual line items, so this is an apportionment, not an exact
+        // per-item payment trace.
+        var opdBillIds = payments.Where(x => x.BillType == "OPD").Select(x => x.Id).Distinct().ToList();
+        var opdItems = await _db.BillItems.Where(x => opdBillIds.Contains(x.BillId)).ToListAsync();
+        var doctorChargeRatioByBill = opdBillIds.ToDictionary(billId => billId, billId =>
+        {
+            var doctorAmount = opdItems.Where(x => x.BillId == billId && IsDoctorConsultationItem(x)).Sum(x => x.Amount);
+            var billTotal = payments.First(p => p.Id == billId).NetAmount;
+            return billTotal != 0 ? doctorAmount / billTotal : 0m;
+        });
+
+        // "Online" bundles every mode besides Cash (UPI/Card/Bank Transfer/
+        // Other) - this is a two-way Cash-vs-Online split per bill type, not
+        // a full mode breakdown (see payment-mode-share for that).
+        var buckets = payments.SelectMany(x =>
+        {
+            if (x.BillType == "OPD")
+            {
+                var ratio = doctorChargeRatioByBill.GetValueOrDefault(x.Id, 0m);
+                return new[]
+                {
+                    new { BillType = "OPD - Doctor Consultation", x.Mode, Amount = x.Amount * ratio },
+                    new { BillType = "OPD - Other Charges", x.Mode, Amount = x.Amount * (1 - ratio) }
+                };
+            }
+            return new[] { new { BillType = x.BillType, x.Mode, x.Amount } };
+        });
+
+        var rows = buckets
+            .GroupBy(x => x.BillType)
+            .Select(group =>
+            {
+                var cash = Math.Round(group.Where(x => x.Mode == "Cash").Sum(x => x.Amount), 2);
+                var online = Math.Round(group.Where(x => x.Mode != "Cash").Sum(x => x.Amount), 2);
+                return new
+                {
+                    BillType = group.Key,
+                    Cash = cash,
+                    Online = online,
+                    Total = cash + online
+                };
+            })
+            .OrderByDescending(x => x.Total)
+            .ToList();
+
+        return Ok(new
+        {
+            Rows = rows,
+            TotalCash = rows.Sum(x => x.Cash),
+            TotalOnline = rows.Sum(x => x.Online),
+            GrandTotal = rows.Sum(x => x.Total)
+        });
+    }
+
     [HttpGet("executive")]
     public async Task<IActionResult> Executive([FromQuery] DateTime? from,[FromQuery] DateTime? to)
     {
@@ -380,6 +455,61 @@ public class ReportingController : ControllerBase
             previousNet=net;
         }
         return Ok(new{Year=selectedYear,Rows=rows});
+    }
+
+    [HttpGet("gst-filing")]
+    public async Task<IActionResult> GstFiling([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    {
+        var start = (from ?? DateTime.Today).Date;
+        var end = (to ?? DateTime.Today).Date;
+        if (end < start) end = start;
+
+        var categories = await GetActiveCategoryNames();
+
+        var bills = await _db.Bills
+            .Where(x => x.Status != "Deleted" && x.BillDate >= start && x.BillDate < end.AddDays(1))
+            .Select(x => new { x.BillDate, x.BillType, x.NetAmount })
+            .ToListAsync();
+
+        var rows = new List<object>();
+        var columnTotals = categories.ToDictionary(c => c, c => 0m);
+        decimal grandTotal = 0;
+
+        for (var date = start; date <= end; date = date.AddDays(1))
+        {
+            var dayBills = bills.Where(x => x.BillDate.Date == date).ToList();
+            var amounts = new Dictionary<string, decimal>();
+            decimal rowTotal = 0;
+            foreach (var category in categories)
+            {
+                var amount = dayBills.Where(x => x.BillType == category).Sum(x => x.NetAmount);
+                amounts[category] = amount;
+                columnTotals[category] += amount;
+                rowTotal += amount;
+            }
+            grandTotal += rowTotal;
+            rows.Add(new { Date = date.ToString("yyyy-MM-dd"), Amounts = amounts, Total = rowTotal });
+        }
+
+        return Ok(new
+        {
+            BillTypes = categories,
+            Rows = rows,
+            ColumnTotals = columnTotals,
+            GrandTotal = grandTotal
+        });
+    }
+
+    // Matches a BillItem that represents a doctor's own consultation charge
+    // (as opposed to other OPD charges like hospital/registration charge),
+    // across every way this app has ever created such a line: the new
+    // catalog-driven Bill flow tags it ReferenceType="DoctorConsultation",
+    // the OPD-visit/registration flows tag it ReferenceType="Doctor", and
+    // all three write the same "Consultation - {doctor name}" Description.
+    private static bool IsDoctorConsultationItem(BillItem item)
+    {
+        if (item.ReferenceType == "DoctorConsultation" || item.ReferenceType == "Doctor") return true;
+        return (item.Description ?? "").StartsWith("Consultation -", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<List<string>> GetActiveCategoryNames()

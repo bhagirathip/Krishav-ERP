@@ -301,6 +301,7 @@ async function saveType() {
 }
 
 async function deleteType(row) {
+  if (!confirm(`Delete medicine type "${row.name}"?`)) return;
   try {
     await api.delete(`/pharmacy/medicine-types/${row.id}`);
     medicineTypes.value = (await api.get('/pharmacy/medicine-types')).data;

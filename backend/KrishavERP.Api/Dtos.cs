@@ -663,6 +663,7 @@ public class PharmacySaleRequest
     public string? WalkInPhone { get; set; }
     public string PaymentMode { get; set; } = "Cash";
     public int? IpdAdmissionId { get; set; }
+    public int RoundOff { get; set; }
     public List<PharmacySaleLineRequest> Items { get; set; } = new();
 }
 
@@ -685,6 +686,14 @@ public class DiscountTypeRequest
     public string DiscountMode { get; set; } = "Percent";
     public decimal Value { get; set; }
     public string Scope { get; set; } = "Individual";
+    public bool IsActive { get; set; } = true;
+}
+
+public class ServiceChargeRequest
+{
+    public string Name { get; set; } = "";
+    public decimal Price { get; set; }
+    public string BillType { get; set; } = "";
     public bool IsActive { get; set; } = true;
 }
 

@@ -27,6 +27,7 @@ const { search: doctorSearch, page: doctorPage, pageCount: doctorPageCount, page
 const { search: patientSearch, page: patientPage, pageCount: patientPageCount, pagedRows: pagedPatientRows, sortedRows: sortedPatientRows, sortBy: sortPatient, sortIndicator: patientSortIndicator } = useGrid(patientRows, pageSize);
 
 const paymentModeShare = ref({ total: 0, items: [] });
+const paymentModeByBillType = ref({ rows: [], totalCash: 0, totalOnline: 0, grandTotal: 0 });
 
 const categoryModal = ref(false);
 const categoryForm = ref({ name: '' });
@@ -55,7 +56,7 @@ async function loadReports() {
     to: to.value
   };
 
-  const [doctorRes, patientRes, shareRes, paymentModeRes, executiveRes, monthlyRes] = await Promise.all([
+  const [doctorRes, patientRes, shareRes, paymentModeRes, paymentModeByBillTypeRes, executiveRes, monthlyRes] = await Promise.all([
     api.get('/reporting/doctor-summary', {
       params: {
         ...common,
@@ -82,6 +83,7 @@ async function loadReports() {
         patientId: selectedPatientId.value || undefined
       }
     }),
+    api.get('/reporting/payment-mode-by-bill-type', { params: common }),
     api.get('/reporting/executive', { params: common }),
     api.get('/reporting/monthly-revenue', { params: { year: selectedYear.value } })
   ]);
@@ -90,6 +92,7 @@ async function loadReports() {
   patientRows.value = patientRes.data.sort((a, b) => Number(b.total) - Number(a.total));
   incomeShare.value = shareRes.data;
   paymentModeShare.value = paymentModeRes.data;
+  paymentModeByBillType.value = paymentModeByBillTypeRes.data;
   executive.value = executiveRes.data;
   monthlyRevenue.value = monthlyRes.data;
 }
@@ -357,6 +360,24 @@ onMounted(load);
       </div>
     </section>
   </div>
+
+  <h2>Cash vs Online by Bill Type</h2>
+  <div v-if="!paymentModeByBillType.rows?.length" class="muted">No payments received for this period.</div>
+  <table v-else class="table">
+    <tr><th>Bill Type</th><th>Cash</th><th>Online</th><th>Total</th></tr>
+    <tr v-for="row in paymentModeByBillType.rows" :key="row.billType">
+      <td>{{ row.billType }}</td>
+      <td>₹{{ money(row.cash) }}</td>
+      <td>₹{{ money(row.online) }}</td>
+      <td><b>₹{{ money(row.total) }}</b></td>
+    </tr>
+    <tr>
+      <td><b>Total</b></td>
+      <td><b>₹{{ money(paymentModeByBillType.totalCash) }}</b></td>
+      <td><b>₹{{ money(paymentModeByBillType.totalOnline) }}</b></td>
+      <td><b>₹{{ money(paymentModeByBillType.grandTotal) }}</b></td>
+    </tr>
+  </table>
 
   <h2>Doctor-wise Report</h2>
   <div class="chart-card card">

@@ -975,6 +975,15 @@ public class LabTest
         get;
         set;
     }
+    // A separate small reference table (its own columns/rows, filled in once
+    // on the master) that prints below the Note on every report for this
+    // test - unlike SchemaJson's rows, it isn't patient-result data, so it's
+    // read live from the master rather than snapshotted per order-test.
+    public string? StaticTableJson
+    {
+        get;
+        set;
+    }
     // Tests sharing the same (non-empty) Group print merged together onto one
     // page when several tests are printed at once; an empty/null Group means
     // this test always prints on its own separate page instead.
@@ -1206,6 +1215,21 @@ public class DiscountType
     public bool IsActive { get; set; } = true;
 }
 
+// A price list for miscellaneous hospital charges (Dressing Charge, Injection
+// Charge, Saline Charge, Emergency Charge, etc.) that don't belong to the
+// Lab/Pharmacy test or product catalogs - a flat name+price lookup, the same
+// shape as those catalogs, so it can be billed the same way.
+public class ServiceCharge
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public decimal Price { get; set; }
+    // Matches a BillTypeMaster.Name (e.g. "OPD", "Emergency") - only bills of
+    // this type offer the charge in their Description catalog dropdown.
+    public string BillType { get; set; } = "";
+    public bool IsActive { get; set; } = true;
+}
+
 public class Referrer
 {
     public int Id { get; set; }
@@ -1397,6 +1421,12 @@ public class PharmacySaleItem
     public int PurchaseItemId { get; set; }
     public string Manufacturer { get; set; } = "";
     public string Hsn { get; set; } = "";
+    // Copied from the purchase batch at sale time (same as Hsn above) so the
+    // printed invoice can show a real tax breakdown of the MRP - MRP is
+    // retail-standard tax-inclusive, so this doesn't change what the patient
+    // pays, it's extracted from the existing amount.
+    public decimal CgstPercent { get; set; }
+    public decimal SgstPercent { get; set; }
     public string ProductName { get; set; } = "";
     public string BatchNo { get; set; } = "";
     public string Packing { get; set; } = "";
