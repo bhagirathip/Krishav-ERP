@@ -1,0 +1,22 @@
+/*
+  dashboard.css
+  Styles specific to views/Dashboard/Dashboard.vue, extracted from style.css.
+*/
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+}
+.metric-card {
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.metric-card .metric {
+  font-size: 34px;
+  margin-top: 8px;
+}
+.money .metric {
+  font-size: 30px;
+}

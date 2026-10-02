@@ -1,0 +1,104 @@
+/*
+  lab.css
+  Styles specific to views/Lab/*.vue (LabMaster, LabPatientTests,
+  CbcAnalyzerResults), extracted from style.css.
+*/
+.lab-master-toolbar {
+  margin-top: 18px;
+}
+.lab-master-grid-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin-top: 10px;
+}
+.lab-master-grid {
+  min-width: 900px;
+}
+.lab-column-editor {
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lab-column-editor input {
+  min-width: 130px;
+}
+.compact-button {
+  min-width: 34px;
+  padding: 6px 9px;
+}
+.lab-master-cell {
+  min-width: 140px;
+  resize: vertical;
+}
+.lab-master-group-row td {
+  background: #eef2ff;
+}
+.lab-master-group-row input {
+  font-weight: 700;
+}
+
+/* LabPatientTests.vue: dynamic result grid */
+.lab-result-dynamic-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin-top: 14px;
+}
+.lab-result-dynamic-table {
+  min-width: 760px;
+}
+.lab-result-dynamic-table th {
+  white-space: nowrap;
+}
+.lab-result-dynamic-table td {
+  min-width: 150px;
+}
+.lab-result-dynamic-table input {
+  width: 100%;
+  min-width: 140px;
+}
+
+/* LabPatientTests.vue: header image upload preview + inline note */
+.logo-preview img {
+  max-height: 100px;
+  max-width: 260px;
+}
+.upload-inline {
+  background: white;
+  color: #1f2937;
+  padding: 8px 12px;
+  border-radius: 7px;
+}
+.upload-inline input {
+  margin-left: 10px;
+  width: auto;
+}
+.mini button {
+  padding: 5px 8px;
+}
+.note-box {
+  margin-top: 15px;
+  padding: 12px;
+  background: #f8fafc;
+  border-left: 4px solid #64748b;
+}
+
+/* CbcAnalyzerResults.vue */
+.cbc-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.cbc-image-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
+}
+.cbc-image-card img {
+  max-width: 100%;
+  border-radius: 4px;
+  background: #fff;
+}

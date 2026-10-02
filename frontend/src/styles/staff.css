@@ -1,0 +1,77 @@
+/*
+  staff.css
+  Attendance-grid styles specific to views/Staff/Staff.vue, extracted from style.css.
+*/
+.attendance-month-wrap {
+  width: 100%;
+  overflow: auto;
+  max-height: 72vh;
+  border: 1px solid #dbe3ec;
+  border-radius: 10px;
+  background: #fff;
+}
+.attendance-month-table {
+  min-width: max-content;
+  margin: 0;
+}
+.attendance-month-table th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f8fafc;
+  min-width: 64px;
+  text-align: center;
+}
+.attendance-month-table .sticky-col {
+  position: sticky;
+  z-index: 6;
+  background: #fff;
+  text-align: left;
+}
+.attendance-month-table th.sticky-col {
+  z-index: 8;
+  background: #f8fafc;
+}
+.attendance-month-table .staff-name-col {
+  left: 0;
+  min-width: 190px;
+  max-width: 190px;
+}
+.attendance-month-table .designation-col {
+  left: 190px;
+  min-width: 150px;
+  max-width: 150px;
+}
+.attendance-cell {
+  min-width: 30px;
+  padding: 4px !important;
+  position: relative;
+  text-align: center;
+}
+.attendance-cell select {
+  width: 30px;
+  min-width: 30px;
+  padding: 6px 2px;
+  font-size: 11px;
+  color: transparent;
+  text-align: center;
+}
+.attendance-cell select option {
+  color: #111;
+}
+.attendance-letter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-weight: 700;
+  font-size: 13px;
+}
+.today-attendance {
+  background: #e8f3ff !important;
+}
+.table.attendance-month-table tr td {
+  text-align: center !important;
+}

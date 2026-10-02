@@ -1,4 +1,12 @@
 using System.Security.Cryptography;
+using KrishavERP.Api.Modules.Auth;
+using KrishavERP.Api.Modules.Patients;
+using KrishavERP.Api.Modules.Visits;
+using KrishavERP.Api.Modules.Billing;
+using KrishavERP.Api.Modules.Staff;
+using KrishavERP.Api.Modules.Reporting;
+using KrishavERP.Api.Modules.Pharmacy;
+using KrishavERP.Api.Modules.Settings;
 namespace KrishavERP.Api;
 public static class PasswordUtil
 {

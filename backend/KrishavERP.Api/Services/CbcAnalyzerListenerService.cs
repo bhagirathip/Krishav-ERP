@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using System.Text;
 using KrishavERP.Api;
+using KrishavERP.Api.Modules.Lab;
 
 namespace KrishavERP.Api.Services;
 

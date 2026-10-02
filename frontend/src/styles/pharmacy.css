@@ -1,0 +1,64 @@
+/*
+  pharmacy.css
+  Styles specific to views/Pharmacy/*.vue (PharmacySales, PharmacyPurchase,
+  PharmacyStockReport), extracted from style.css.
+*/
+.modal-pharmacy-invoice {
+  width: min(98vw, 1680px);
+  max-height: 94vh;
+}
+.pharmacy-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.pharmacy-entry-table {
+  min-width: 1900px;
+}
+.pharmacy-entry-table input {
+  min-width: 95px;
+}
+.pharmacy-entry-table .tiny-input {
+  min-width: 62px;
+  width: 62px;
+}
+.pharmacy-total-row td {
+  background: #f1f5f9;
+  font-weight: 700;
+}
+.pharmacy-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #dbe3ec;
+  padding-bottom: 8px;
+}
+.pharmacy-tabs button {
+  background: #e8eef5;
+  color: #1f2937;
+}
+.pharmacy-tabs button.active {
+  background: #0f6ab4;
+  color: #fff;
+}
+.pharmacy-tabs button:hover {
+  filter: brightness(.98);
+}
+
+/* PharmacySales.vue: bill discount box + summary report two-column layout */
+.discount-box {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  margin-top: 14px;
+}
+.report-two-column {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 20px;
+}
+@media (max-width: 1000px) {
+  .report-two-column {
+    grid-template-columns: 1fr;
+  }
+}

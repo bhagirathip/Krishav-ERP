@@ -1,4 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using KrishavERP.Api.Modules.Auth;
+using KrishavERP.Api.Modules.Patients;
+using KrishavERP.Api.Modules.Visits;
+using KrishavERP.Api.Modules.Billing;
+using KrishavERP.Api.Modules.Doctors;
+using KrishavERP.Api.Modules.Lab;
+using KrishavERP.Api.Modules.Pharmacy;
+using KrishavERP.Api.Modules.Referrals;
+using KrishavERP.Api.Modules.Settings;
+using KrishavERP.Api.Modules.Staff;
+using KrishavERP.Api.Modules.Expenses;
+using KrishavERP.Api.Modules.Reporting;
 namespace KrishavERP.Api;
 public class AppDbContext : DbContext
 {

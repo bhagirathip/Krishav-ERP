@@ -1,0 +1,53 @@
+/*
+  opd.css
+  Prescription-print styles specific to views/Opd/Opd.vue, extracted from style.css.
+*/
+.prescription {
+  background: white;
+  color: black;
+  padding: 20mm;
+  width: 210mm;
+  min-height: 297mm;
+}
+.prescription .logo-box {
+  width: 65px;
+  height: 65px;
+  border: 1px solid #111;
+  display: grid;
+  place-items: center;
+  margin: auto auto 8px;
+}
+.rx-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 20px;
+}
+.rx-vitals-left {
+  position: absolute;
+  left: 16mm;
+  top: 82mm;
+  font-size: 12px;
+}
+.rx-page {
+  position: relative;
+  min-height: 250mm;
+}
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .prescription,
+  .prescription * {
+    visibility: visible;
+  }
+  .prescription {
+    position: absolute;
+    left: 0;
+    top: 0;
+    padding: 15mm;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

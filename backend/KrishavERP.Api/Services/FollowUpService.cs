@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using KrishavERP.Api.Modules.Patients;
 
 namespace KrishavERP.Api.Services;
 

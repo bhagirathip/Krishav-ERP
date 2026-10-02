@@ -1,0 +1,41 @@
+/*
+  expense.css
+  Styles specific to views/Expense/DoctorSettlements.vue, extracted from style.css.
+*/
+.doctor-settlement-group {
+  margin-bottom: 14px;
+  padding: 0;
+  overflow: hidden;
+}
+.doctor-settlement-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.doctor-settlement-head:hover {
+  background: #f8fafc;
+}
+.collapse-caret {
+  display: inline-block;
+  width: 16px;
+  color: #64748b;
+}
+.doctor-settlement-totals {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 13px;
+  color: #64748b;
+  flex-wrap: wrap;
+}
+.doctor-settlement-totals b {
+  color: #1f2937;
+  font-size: 14px;
+}
+.doctor-settlement-group .table {
+  margin-top: 0;
+}

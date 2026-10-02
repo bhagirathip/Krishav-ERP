@@ -1,0 +1,18 @@
+/*
+  ipd.css
+  Styles specific to views/Ipd/Ipd.vue, extracted from style.css.
+*/
+.ipd-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.ipd-lab {
+  margin-top: 24px;
+}
+@media (max-width: 1000px) {
+  .ipd-columns {
+    grid-template-columns: 1fr;
+  }
+}
