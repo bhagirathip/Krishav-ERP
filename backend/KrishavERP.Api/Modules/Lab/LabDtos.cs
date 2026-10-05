@@ -4,7 +4,7 @@ public class LabOrderCreateRequest
 {
     public int PatientId { get; set; }
     public int? IpdAdmissionId { get; set; }
-    public int RoundOff { get; set; }
+    public decimal RoundOff { get; set; }
     public List<LabOrderLine> Tests { get; set; } = new();
 }
 

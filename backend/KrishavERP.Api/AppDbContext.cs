@@ -120,6 +120,7 @@ public class AppDbContext : DbContext
         b.Entity<Bill>().Property(x=>x.DiscountAmount).HasPrecision(18,2);
         b.Entity<Bill>().Property(x=>x.NetAmount).HasPrecision(18,2);
         b.Entity<Bill>().Property(x=>x.PaidAmount).HasPrecision(18,2);
+        b.Entity<Bill>().Property(x=>x.RoundOff).HasPrecision(18,2);
         b.Entity<BillItem>().Property(x=>x.UnitPrice).HasPrecision(18,2);
         b.Entity<BillItem>().Property(x=>x.DiscountValue).HasPrecision(18,2);
         b.Entity<BillItem>().Property(x=>x.DiscountAmount).HasPrecision(18,2);

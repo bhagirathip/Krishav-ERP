@@ -14,7 +14,15 @@ public class BillCreateRequest
     public int? DoctorId { get; set; }
     public string BillType { get; set; } = "OPD";
     public int? BulkDiscountTypeId { get; set; }
-    public int RoundOff { get; set; }
+
+    // User-entered value for a variable-rate Bulk discount (Manager
+    // Discount/Admin Discount, where BulkDiscountTypeId is set but the type's
+    // own Value isn't the real cap) or for a General Manager's direct entry
+    // (no BulkDiscountTypeId at all). BulkDiscountMode only matters for the
+    // latter case - Manager/Admin Discount are always Percent.
+    public decimal? BulkDiscountValue { get; set; }
+    public string? BulkDiscountMode { get; set; }
+    public decimal RoundOff { get; set; }
     public List<BillCreateItem> Items { get; set; } = new();
 }
 

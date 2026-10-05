@@ -125,6 +125,10 @@ function billFinalAmount() {
 }
 
 async function createIpdBill() {
+  // RoundOff accepts decimals (e.g. 5.05) but is still money, so clamp to 2
+  // decimal places - same precision the server rounds to.
+  bill.value.roundOff = Math.round((Number(bill.value.roundOff) || 0) * 100) / 100;
+
   if (bill.value.roundOff < -9 || bill.value.roundOff > 9) {
     alert('Round off must be between -9 and 9.');
     return;
@@ -416,7 +420,7 @@ onMounted(load);
         <div class="bill-total-box">
           <div><span>Before Discount</span><b>₹{{billBeforeDiscount().toFixed(2)}}</b></div>
           <div class="grand"><span>After Discount</span><b>₹{{billAfterDiscount().toFixed(2)}}</b></div>
-          <div><span>Round Off (-9 to 9)</span><input v-model.number="bill.roundOff" type="number" min="-9" max="9" step="1" style="width:80px;display:inline-block"></div>
+          <div><span>Round Off (-9 to 9)</span><input v-model.number="bill.roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block"></div>
           <div class="grand"><span>Final Amount</span><b>₹{{billFinalAmount().toFixed(2)}}</b></div>
         </div>
         <div class="toolbar">

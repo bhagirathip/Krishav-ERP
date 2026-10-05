@@ -97,7 +97,7 @@ const billSearchPage = defineModel('billSearchPage');
       </tr>
     </table>
 
-    <div class="bill-total-box"><div><span>Before Discount</span><b>₹{{ totals.gross.toFixed(2) }}</b></div><div><span>Discount</span><b>₹{{ totals.discount.toFixed(2) }}</b></div><div><span>Round Off (-9 to 9)</span><input v-model.number="roundOff" type="number" min="-9" max="9" step="1" style="width:80px;display:inline-block"></div><div class="grand"><span>Total</span><b>₹{{ totals.net.toFixed(2) }}</b></div></div>
+    <div class="bill-total-box"><div><span>Before Discount</span><b>₹{{ totals.gross.toFixed(2) }}</b></div><div><span>Discount</span><b>₹{{ totals.discount.toFixed(2) }}</b></div><div><span>Round Off (-9 to 9)</span><input v-model.number="roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block"></div><div class="grand"><span>Total</span><b>₹{{ totals.net.toFixed(2) }}</b></div></div>
     <div class="modal-actions"><button v-if="can('PHARMACY_SALES','add')" @click="createSale">Complete Sale</button></div>
   </div>
 </template>

@@ -66,7 +66,7 @@ public class PharmacySaleRequest
     public string? WalkInPhone { get; set; }
     public string PaymentMode { get; set; } = "Cash";
     public int? IpdAdmissionId { get; set; }
-    public int RoundOff { get; set; }
+    public decimal RoundOff { get; set; }
     public List<PharmacySaleLineRequest> Items { get; set; } = new();
 }
 

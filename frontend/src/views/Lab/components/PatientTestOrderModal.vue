@@ -57,7 +57,12 @@ function finalTotal() {
 async function saveOrder() {
   if (!order.value.patientId) return alert('Select patient.');
   if (order.value.tests.some(x => !x.labTestId)) return alert('Select test for every row.');
+
+  // RoundOff accepts decimals (e.g. 5.05) but is still money, so clamp to 2
+  // decimal places - same precision the server rounds to.
+  order.value.roundOff = Math.round((Number(order.value.roundOff) || 0) * 100) / 100;
   if (order.value.roundOff < -9 || order.value.roundOff > 9) return alert('Round off must be between -9 and 9.');
+
   await api.post('/lab/orders', order.value);
   emit('saved');
 }
@@ -100,7 +105,7 @@ async function saveOrder() {
         <div class="grand"><span>After Discount</span><b>₹{{ afterTotal().toFixed(2) }}</b></div>
         <div>
           <span>Round Off (-9 to 9)</span>
-          <input v-model.number="order.roundOff" type="number" min="-9" max="9" step="1" style="width:80px;display:inline-block">
+          <input v-model.number="order.roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block">
         </div>
         <div class="grand"><span>Final Amount</span><b>₹{{ finalTotal().toFixed(2) }}</b></div>
       </div>

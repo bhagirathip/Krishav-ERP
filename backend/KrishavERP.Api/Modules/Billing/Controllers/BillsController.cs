@@ -6,6 +6,8 @@ using Microsoft.EntityFrameworkCore;
 using KrishavERP.Api.Modules.Lab;
 using KrishavERP.Api.Modules.Lab.Controllers;
 using KrishavERP.Api.Modules.Doctors;
+using KrishavERP.Api.Modules.Auth;
+using System.Security.Claims;
 
 namespace KrishavERP.Api.Modules.Billing.Controllers;
 
@@ -152,6 +154,7 @@ public class BillsController : ControllerBase
 
         if (request.RoundOff < -9 || request.RoundOff > 9)
             return BadRequest(new { message = "Round off must be between -9 and 9." });
+        request.RoundOff = Math.Round(request.RoundOff, 2);
 
         try
         {
@@ -175,10 +178,11 @@ public class BillsController : ControllerBase
             return BadRequest(new { message = "Please select a valid bill type." });
         if (request.RoundOff < -9 || request.RoundOff > 9)
             return BadRequest(new { message = "Round off must be between -9 and 9." });
+        request.RoundOff = Math.Round(request.RoundOff, 2);
 
         try
         {
-            var calculated = await CalculateAsync(request.Items, request.BulkDiscountTypeId);
+            var calculated = await CalculateAsync(request.Items, request.BulkDiscountTypeId, request.BulkDiscountValue, request.BulkDiscountMode);
             var roundedNet = calculated.Net + request.RoundOff;
 
             _db.BillItems.RemoveRange(bill.Items);
@@ -430,7 +434,7 @@ public class BillsController : ControllerBase
 
     private async Task<Bill> BuildBill(BillCreateRequest request)
     {
-        var calculated = await CalculateAsync(request.Items, request.BulkDiscountTypeId);
+        var calculated = await CalculateAsync(request.Items, request.BulkDiscountTypeId, request.BulkDiscountValue, request.BulkDiscountMode);
         var patient = request.PatientId.HasValue ? await _db.Patients.FindAsync(request.PatientId.Value) : null;
 
         var bill = new Bill
@@ -476,7 +480,16 @@ public class BillsController : ControllerBase
         return bill;
     }
 
-    private async Task<BillCalculation> CalculateAsync(List<BillCreateItem> source, int? bulkDiscountTypeId)
+    private async Task<string?> CurrentUserRoleAsync()
+    {
+        var idText = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(idText, out var userId)) return null;
+        var user = await _db.AppUsers.FindAsync(userId);
+        if (user?.RoleId == null) return null;
+        return await _db.AppRoles.Where(x => x.Id == user.RoleId.Value).Select(x => x.Name).FirstOrDefaultAsync();
+    }
+
+    private async Task<BillCalculation> CalculateAsync(List<BillCreateItem> source, int? bulkDiscountTypeId, decimal? bulkDiscountValue, string? bulkDiscountMode)
     {
         if (source.Count == 0) throw new InvalidOperationException("At least one bill item is required.");
 
@@ -507,7 +520,8 @@ public class BillsController : ControllerBase
             });
         }
 
-        var bulk = await _discounts.ResolveAsync(afterIndividualDiscount, bulkDiscountTypeId, "Bulk");
+        var currentRole = await CurrentUserRoleAsync();
+        var bulk = await _discounts.ResolveBulkAsync(afterIndividualDiscount, bulkDiscountTypeId, bulkDiscountValue, bulkDiscountMode, currentRole);
         return new BillCalculation
         {
             BeforeDiscount = beforeDiscount,

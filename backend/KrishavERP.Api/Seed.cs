@@ -55,9 +55,19 @@ public static class DbSeeder
         }
         else adminRole=db.AppRoles.First();
         if(!db.AppUsers.Any())db.AppUsers.Add(new AppUser{Username="admin",DisplayName="Administrator",PasswordHash=PasswordUtil.Hash("Admin@123"),RoleId=adminRole.Id});
+        // Manager/General Manager get no module permissions by default - an
+        // admin grants them access (e.g. to BILL) via the Permissions screen
+        // once created. They exist here purely so the role names "Manager"/
+        // "General Manager" that the Bulk Discount feature checks against
+        // are available to assign from day one.
+        if(!db.AppRoles.Any(x=>x.Name=="Manager"))
+            db.AppRoles.Add(new AppRole{Name="Manager",Description="Can apply Manager Discount on bills (capped %, configurable in Settings)"});
+        if(!db.AppRoles.Any(x=>x.Name=="General Manager"))
+            db.AppRoles.Add(new AppRole{Name="General Manager",Description="Can apply a direct discount amount/percentage on bills (no dropdown), capped in Settings"});
+        db.SaveChanges();
         if(!db.AppSettings.Any())
         {
-            db.AppSettings.AddRange(                 new AppSetting{Name="Hospital Name",Value="Krishav Health Care",Type="Branding"},                 new AppSetting{Name="Hospital Address",Value="Housing Board, J.K. Pur Road, Rayagada - 765001, Odisha",Type="Branding"},                 new AppSetting{Name="Hospital Phone",Value="8001011818 / 9002561818",Type="Branding"},                 new AppSetting{Name="Hospital Logo",Value="",Type="Branding"},                 new AppSetting{Name="OPD Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signature",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signatory Name",Value="",Type="Generic"},                 new AppSetting{Name="Lab Signatory Qualification",Value="",Type="Generic"},                 new AppSetting{Name="Pharmacy Header",Value="",Type="Branding"},                 new AppSetting{Name="Blank Prescription Header",Value="",Type="Branding"},                 new AppSetting{Name="Bank Name",Value="",Type="Generic"},                 new AppSetting{Name="Bank Account Number",Value="",Type="Generic"},                 new AppSetting{Name="Hospital Charge",Value="100",Type="Billing"},                 new AppSetting{Name="Emergency Rate",Value="500",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Cash",Value="300",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Insurance",Value="400",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Ayushman",Value="350",Type="Billing"},                 new AppSetting{Name="Hospital GST No",Value="",Type="Billing"},                 new AppSetting{Name="Pharmacy GST No",Value="",Type="Billing"},                 new AppSetting{Name="Bill HSN No",Value="9993",Type="Billing"},                 new AppSetting{Name="Bill GST Rate",Value="0",Type="Billing"}             );
+            db.AppSettings.AddRange(                 new AppSetting{Name="Hospital Name",Value="Krishav Health Care",Type="Branding"},                 new AppSetting{Name="Hospital Address",Value="Housing Board, J.K. Pur Road, Rayagada - 765001, Odisha",Type="Branding"},                 new AppSetting{Name="Hospital Phone",Value="8001011818 / 9002561818",Type="Branding"},                 new AppSetting{Name="Hospital Logo",Value="",Type="Branding"},                 new AppSetting{Name="OPD Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Header",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signature",Value="",Type="Branding"},                 new AppSetting{Name="Lab Signatory Name",Value="",Type="Generic"},                 new AppSetting{Name="Lab Signatory Qualification",Value="",Type="Generic"},                 new AppSetting{Name="Pharmacy Header",Value="",Type="Branding"},                 new AppSetting{Name="Blank Prescription Header",Value="",Type="Branding"},                 new AppSetting{Name="Bank Name",Value="",Type="Generic"},                 new AppSetting{Name="Bank Account Number",Value="",Type="Generic"},                 new AppSetting{Name="Hospital Charge",Value="100",Type="Billing"},                 new AppSetting{Name="Emergency Rate",Value="500",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Cash",Value="300",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Insurance",Value="400",Type="Billing"},                 new AppSetting{Name="Oxygen Charge Ayushman",Value="350",Type="Billing"},                 new AppSetting{Name="Hospital GST No",Value="",Type="Billing"},                 new AppSetting{Name="Pharmacy GST No",Value="",Type="Billing"},                 new AppSetting{Name="Bill HSN No",Value="9993",Type="Billing"},                 new AppSetting{Name="Bill GST Rate",Value="0",Type="Billing"},                 new AppSetting{Name="Manager Discount Max Percent",Value="15",Type="Billing"},                 new AppSetting{Name="General Manager Discount Max Percent",Value="10",Type="Billing"}             );
         }
         if(!db.ServiceCharges.Any())
         {
@@ -135,6 +145,10 @@ public static class DbSeeder
                 db.DiscountTypes.Add(new DiscountType{Name=item.Name,Scope=item.Scope,DiscountMode="Percent",Value=0,IsActive=false});
             db.SaveChanges();
         }
+        if(!db.DiscountTypes.Any(x=>x.Name=="Manager Discount"))
+            db.DiscountTypes.Add(new DiscountType{Name="Manager Discount",Scope="Bulk",DiscountMode="Percent",Value=0,IsActive=true});
+        if(!db.DiscountTypes.Any(x=>x.Name=="Admin Discount"))
+            db.DiscountTypes.Add(new DiscountType{Name="Admin Discount",Scope="Bulk",DiscountMode="Percent",Value=100,IsActive=true});
         if(!db.BillTypes.Any())
         {
             db.BillTypes.AddRange(

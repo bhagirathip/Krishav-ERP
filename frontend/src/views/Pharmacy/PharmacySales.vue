@@ -171,7 +171,10 @@ async function createSale() {
     }
   }
 
-  if (roundOff.value < -9 || roundOff.value > 9) {
+  // RoundOff accepts decimals (e.g. 5.05) but is still money, so clamp to 2
+  // decimal places - same precision the server rounds to.
+  const roundOffValue = Math.round((Number(roundOff.value) || 0) * 100) / 100;
+  if (roundOffValue < -9 || roundOffValue > 9) {
     alert('Round off must be between -9 and 9.');
     return;
   }
@@ -184,7 +187,7 @@ async function createSale() {
       walkInPatientName: patientId.value ? null : walkInPatientName.value,
       walkInPhone: patientId.value ? null : walkInPhone.value,
       paymentMode: paymentMode.value,
-      roundOff: roundOff.value,
+      roundOff: roundOffValue,
       items: cart.value.map(x => ({
         purchaseItemId: x.purchaseItemId,
         unitType: x.unitType,

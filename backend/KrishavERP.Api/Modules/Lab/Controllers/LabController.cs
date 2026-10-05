@@ -134,6 +134,7 @@ public class LabController : ControllerBase
         {
             return BadRequest(new { message = "Round off must be between -9 and 9." });
         }
+        request.RoundOff = Math.Round(request.RoundOff, 2);
 
         var ids = request.Tests.Select(x => x.LabTestId).Distinct().ToList();
         var tests = await _db.LabTests

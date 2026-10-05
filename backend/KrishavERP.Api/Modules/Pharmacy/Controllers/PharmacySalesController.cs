@@ -151,6 +151,7 @@ public class PharmacySalesController : ControllerBase
         {
             return BadRequest(new { message = "Round off must be between -9 and 9." });
         }
+        request.RoundOff = Math.Round(request.RoundOff, 2);
 
         if (request.PatientId.HasValue)
         {

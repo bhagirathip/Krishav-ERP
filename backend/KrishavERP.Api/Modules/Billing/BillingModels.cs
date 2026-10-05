@@ -29,11 +29,12 @@ public class Bill
     public decimal DiscountAmount { get; set; }
     public decimal NetAmount { get; set; }
 
-    // Small manual rounding nudge (-9..9) folded into NetAmount so the final
-    // total lands on a clean number (e.g. 448 + 2 => 450). Kept separately so
-    // the app can show it as its own field, but it is never a separate line
-    // on the printed bill - it just shows up as part of the total already.
-    public int RoundOff { get; set; }
+    // Small manual rounding nudge (-9..9, decimals like 5.05 allowed) folded
+    // into NetAmount so the final total lands on a clean number (e.g.
+    // 448 + 2 => 450). Kept separately so the app can show it as its own
+    // field, but it is never a separate line on the printed bill - it just
+    // shows up as part of the total already.
+    public decimal RoundOff { get; set; }
     public decimal PaidAmount { get; set; }
     public string Status { get; set; } = "Unpaid";
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
