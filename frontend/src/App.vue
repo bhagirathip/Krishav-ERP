@@ -162,7 +162,8 @@ onMounted(async () => {
           show('PHARMACY_SALES') ||
           show('PHARMACY_EXPIRY') ||
           show('PHARMACY_STOCK_REPORT') ||
-          show('PHARMACY_HOSPITAL')
+          show('PHARMACY_HOSPITAL') ||
+          show('PHARMACY_BILLS')
         "
         class="menu-group collapsible-menu"
       >
@@ -174,6 +175,7 @@ onMounted(async () => {
           <router-link v-if="show('PHARMACY_DISTRIBUTOR')" class="submenu-link" to="/pharmacy/distributors">Distributor Master</router-link>
           <router-link v-if="show('PHARMACY_PURCHASE')" class="submenu-link" to="/pharmacy/purchase">Purchase</router-link>
           <router-link v-if="show('PHARMACY_SALES')" class="submenu-link" to="/pharmacy/sales">Sales</router-link>
+          <router-link v-if="show('PHARMACY_BILLS')" class="submenu-link" to="/pharmacy/bills">Bills</router-link>
           <router-link v-if="show('PHARMACY_EXPIRY')" class="submenu-link" to="/pharmacy/expiry">Expiry Medicine</router-link>
           <router-link v-if="show('PHARMACY_STOCK_REPORT')" class="submenu-link" to="/pharmacy/stock-report">Stock Report</router-link>
           <router-link v-if="show('PHARMACY_HOSPITAL')" class="submenu-link" to="/pharmacy/hospital">Hospital</router-link>

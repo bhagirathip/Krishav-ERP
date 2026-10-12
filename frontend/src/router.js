@@ -39,6 +39,7 @@ import LabReport from './views/Reports/LabReport.vue';
 import PharmacyReport from './views/Reports/PharmacyReport.vue';
 import PharmacyStockReport from './views/Pharmacy/PharmacyStockReport.vue';
 import PharmacyHospital from './views/Pharmacy/PharmacyHospital.vue';
+import PharmacyBills from './views/Pharmacy/PharmacyBills.vue';
 import CbcAnalyzerResults from './views/Lab/CbcAnalyzerResults.vue';
 import ServiceCharges from './views/Master/ServiceCharges.vue';
 
@@ -59,6 +60,7 @@ const router = createRouter({
     { path: '/pharmacy/report', component: PharmacyReport, meta: { module: 'PHARMACY_REPORT' } },
     { path: '/pharmacy/stock-report', component: PharmacyStockReport, meta: { module: 'PHARMACY_STOCK_REPORT' } },
     { path: '/pharmacy/hospital', component: PharmacyHospital, meta: { module: 'PHARMACY_HOSPITAL' } },
+    { path: '/pharmacy/bills', component: PharmacyBills, meta: { module: 'PHARMACY_BILLS' } },
     { path: '/lab', redirect: '/lab/master' },
     { path: '/lab/master', component: LabMaster, meta: { module: 'LAB_MASTER' } },
     { path: '/lab/patient-tests', component: LabPatientTests, meta: { module: 'LAB_PATIENT_TESTS' } },

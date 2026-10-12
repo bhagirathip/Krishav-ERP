@@ -31,6 +31,9 @@ async function fetchBillsPage(params) {
   const baseParams = {
     status: tab.value,
     billType: billTypeFilter.value === 'All' ? undefined : billTypeFilter.value,
+    // Pharmacy bills have their own dedicated Bills screen under the
+    // Pharmacy menu - this screen never shows them, regardless of filters.
+    excludePharmacy: true,
     ...dateParams,
     // No searchColumn - a plain search box matches bill number, patient
     // name and status together server-side (see BillsController's default
@@ -92,6 +95,9 @@ const groupedRows = computed(() => {
 const patients = ref([]);
 const doctors = ref([]);
 const categories = ref([]);
+// Pharmacy is billed/managed entirely on its own screen now - never offered
+// here, whether filtering the grid or creating/editing a bill.
+const nonPharmacyCategories = computed(() => categories.value.filter(x => x.name !== 'Pharmacy'));
 const catalog = ref([]);
 const discounts = ref([]);
 const individualDiscounts = computed(() => discounts.value.filter(x => x.isActive && x.scope === 'Individual'));
@@ -716,7 +722,7 @@ onMounted(load);
       Bill Type
       <select v-model="billTypeFilter" @change="page = 1; reload()">
         <option value="All">All Bill Types</option>
-        <option v-for="category in categories" :key="category.id" :value="category.name">{{ category.name }}</option>
+        <option v-for="category in nonPharmacyCategories" :key="category.id" :value="category.name">{{ category.name }}</option>
       </select>
     </label>
   </div>
@@ -868,7 +874,7 @@ onMounted(load);
         <label>
           Bill Type *
           <select v-model="form.billType">
-            <option v-for="category in categories" :key="category.id" :value="category.name">{{ category.name }}</option>
+            <option v-for="category in nonPharmacyCategories" :key="category.id" :value="category.name">{{ category.name }}</option>
           </select>
         </label>
       </div>

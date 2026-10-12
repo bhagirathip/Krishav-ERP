@@ -78,6 +78,20 @@ public class PharmacySaleLineRequest
     public int? DiscountTypeId { get; set; }
 }
 
+public class PharmacyReturnRequest
+{
+    public int PharmacySaleId { get; set; }
+    public string? RefundMode { get; set; }
+    public string? Reference { get; set; }
+    public List<PharmacyReturnLineRequest> Items { get; set; } = new();
+}
+
+public class PharmacyReturnLineRequest
+{
+    public int PharmacySaleItemId { get; set; }
+    public int Quantity { get; set; }
+}
+
 public class PharmacyMedicineTypeRequest
 {
     public string Name { get; set; } = "";

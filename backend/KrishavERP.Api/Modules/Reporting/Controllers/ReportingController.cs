@@ -646,6 +646,10 @@ public class ReportingController : ControllerBase
         return Ok(new{Year=selectedYear,Rows=rows});
     }
 
+    // Hospital-side GST filing - every billable category except Pharmacy,
+    // which now files separately (see GstFilingPharmacy below) since it has
+    // its own GST No/HSN setup and its own return/credit-note flow that
+    // doesn't fit the same per-bill NetAmount shape as hospital billing.
     [HttpGet("gst-filing")]
     public async Task<IActionResult> GstFiling([FromQuery] DateTime? from, [FromQuery] DateTime? to)
     {
@@ -653,10 +657,10 @@ public class ReportingController : ControllerBase
         var end = (to ?? DateTime.Today).Date;
         if (end < start) end = start;
 
-        var categories = await GetActiveCategoryNames();
+        var categories = (await GetActiveCategoryNames()).Where(c => c != "Pharmacy").ToList();
 
         var bills = await _db.Bills
-            .Where(x => x.Status != "Deleted" && x.BillDate >= start && x.BillDate < end.AddDays(1))
+            .Where(x => x.Status != "Deleted" && x.BillType != "Pharmacy" && x.BillDate >= start && x.BillDate < end.AddDays(1))
             .Select(x => new { x.BillDate, x.BillType, x.NetAmount })
             .ToListAsync();
 
@@ -686,6 +690,83 @@ public class ReportingController : ControllerBase
             Rows = rows,
             ColumnTotals = columnTotals,
             GrandTotal = grandTotal
+        });
+    }
+
+    // Pharmacy-side GST filing - date-wise Taxable/CGST/SGST computed from
+    // each sale item's MRP (tax-inclusive, same extraction formula used on
+    // the printed pharmacy invoice - see PharmacySalesController.Print),
+    // netted against returns on the date the return actually happened (a
+    // credit note is filed in the period it's issued, not retroactively
+    // against the original sale's date).
+    [HttpGet("gst-filing-pharmacy")]
+    public async Task<IActionResult> GstFilingPharmacy([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    {
+        var start = (from ?? DateTime.Today).Date;
+        var end = (to ?? DateTime.Today).Date;
+        if (end < start) end = start;
+        var endExclusive = end.AddDays(1);
+
+        var saleItems = await (
+            from item in _db.PharmacySaleItems
+            join sale in _db.PharmacySales on item.PharmacySaleId equals sale.Id
+            where sale.SaleDateUtc >= start && sale.SaleDateUtc < endExclusive
+            select new { sale.SaleDateUtc, item.TotalAmount, item.CgstPercent, item.SgstPercent }
+        ).ToListAsync();
+
+        var returnItems = await (
+            from item in _db.PharmacyReturnItems
+            join ret in _db.PharmacyReturns on item.PharmacyReturnId equals ret.Id
+            where ret.ReturnDateUtc >= start && ret.ReturnDateUtc < endExclusive
+            select new { ret.ReturnDateUtc, item.TotalAmount, item.CgstPercent, item.SgstPercent }
+        ).ToListAsync();
+
+        (decimal taxable, decimal cgst, decimal sgst) Extract(decimal totalAmount, decimal cgstPercent, decimal sgstPercent)
+        {
+            var rate = cgstPercent + sgstPercent;
+            var taxable = rate > 0 ? Math.Round(totalAmount / (1 + rate / 100m), 2) : totalAmount;
+            var cgst = Math.Round(taxable * cgstPercent / 100m, 2);
+            var sgst = Math.Round(taxable * sgstPercent / 100m, 2);
+            return (taxable, cgst, sgst);
+        }
+
+        var rows = new List<object>();
+        decimal totalTaxable = 0, totalCgst = 0, totalSgst = 0, totalAmount = 0;
+
+        for (var date = start; date <= end; date = date.AddDays(1))
+        {
+            decimal dayTaxable = 0, dayCgst = 0, daySgst = 0, dayAmount = 0;
+
+            foreach (var item in saleItems.Where(x => x.SaleDateUtc.Date == date))
+            {
+                var (taxable, cgst, sgst) = Extract(item.TotalAmount, item.CgstPercent, item.SgstPercent);
+                dayTaxable += taxable; dayCgst += cgst; daySgst += sgst; dayAmount += item.TotalAmount;
+            }
+
+            foreach (var item in returnItems.Where(x => x.ReturnDateUtc.Date == date))
+            {
+                var (taxable, cgst, sgst) = Extract(item.TotalAmount, item.CgstPercent, item.SgstPercent);
+                dayTaxable -= taxable; dayCgst -= cgst; daySgst -= sgst; dayAmount -= item.TotalAmount;
+            }
+
+            totalTaxable += dayTaxable; totalCgst += dayCgst; totalSgst += daySgst; totalAmount += dayAmount;
+            rows.Add(new
+            {
+                Date = date.ToString("yyyy-MM-dd"),
+                Taxable = Math.Round(dayTaxable, 2),
+                Cgst = Math.Round(dayCgst, 2),
+                Sgst = Math.Round(daySgst, 2),
+                Total = Math.Round(dayAmount, 2)
+            });
+        }
+
+        return Ok(new
+        {
+            Rows = rows,
+            TotalTaxable = Math.Round(totalTaxable, 2),
+            TotalCgst = Math.Round(totalCgst, 2),
+            TotalSgst = Math.Round(totalSgst, 2),
+            GrandTotal = Math.Round(totalAmount, 2)
         });
     }
 

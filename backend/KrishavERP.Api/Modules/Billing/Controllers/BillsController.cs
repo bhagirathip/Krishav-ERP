@@ -33,6 +33,7 @@ public class BillsController : ControllerBase
         [FromQuery] DateTime? from = null,
         [FromQuery] DateTime? to = null,
         [FromQuery] string? billType = null,
+        [FromQuery] bool excludePharmacy = false,
         [FromQuery] int? page = null,
         [FromQuery] int? pageSize = null,
         [FromQuery] string? sortBy = null,
@@ -52,6 +53,14 @@ public class BillsController : ControllerBase
         if (from.HasValue) query = query.Where(x => x.BillDate >= from.Value.Date);
         if (to.HasValue) query = query.Where(x => x.BillDate < to.Value.Date.AddDays(1));
         if (!string.IsNullOrWhiteSpace(billType)) query = query.Where(x => x.BillType == billType);
+
+        // The main Bills screen excludes Pharmacy entirely - pharmacy sales
+        // get their own dedicated Bills screen under the Pharmacy menu (see
+        // PharmacySalesController.Create, which is what stamps BillType =
+        // "Pharmacy" in the first place). billType above still works for
+        // whoever explicitly asks for Pharmacy bills (the new Pharmacy Bills
+        // screen itself).
+        if (excludePharmacy) query = query.Where(x => x.BillType != "Pharmacy");
 
         // patientName/referrerName/doctorName below are resolved via bulk
         // dictionary lookups after the fetch (not EF navigation properties),
