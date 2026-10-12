@@ -83,6 +83,25 @@ public class PharmacyMedicineTypeRequest
     public string Name { get; set; } = "";
 }
 
+public class HospitalIssueRequest
+{
+    public string Department { get; set; } = "";
+    public List<HospitalIssueLineRequest> Items { get; set; } = new();
+}
+
+public class HospitalIssueLineRequest
+{
+    public int PurchaseItemId { get; set; }
+    public string UnitType { get; set; } = "Strip";
+    public int Quantity { get; set; }
+}
+
+public class HospitalSettlementPaymentRequest
+{
+    public string PaymentMode { get; set; } = "Cash";
+    public string? ReferenceNumber { get; set; }
+}
+
 public class PharmacyExpiryActionRequest
 {
     public int PurchaseItemId { get; set; }

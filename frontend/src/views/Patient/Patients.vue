@@ -4,16 +4,36 @@ import { api, assetUrl } from '../../api';
 import { can } from '../../auth';
 import Pagination from '../../components/Pagination.vue';
 import GridSearch from '../../components/GridSearch.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 import { ageText } from '../../utils/age';
 import PatientDocumentsModal from './components/PatientDocumentsModal.vue';
 import PatientOpdBillModal from './components/PatientOpdBillModal.vue';
 import PatientFollowUpsModal from './components/PatientFollowUpsModal.vue';
 import PatientCategoryModal from './components/PatientCategoryModal.vue';
 
-const rows = ref([]);
 const pageSize = 10;
-const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(rows, pageSize);
+
+// registrationType/doctorName/referrerName aren't real Patient columns - each
+// is derived per-row (latest OPD/IPD/OT visit, referrer lookup) in the
+// backend's enrichment loop below, so they can't be pushed into a SQL
+// ORDER BY/WHERE without a much bigger rewrite. Search here is therefore
+// scoped to the 5 real columns the backend's default search branch ORs
+// together (name, phone, patientCode, address, marketingSource) - no
+// searchColumn is sent, a plain search box matches all of them server-side.
+async function fetchPatientsPage(params) {
+  const { data } = await api.get('/patients', {
+    params: {
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchPatientsPage, pageSize);
 const doctors = ref([]);
 const beds = ref([]);
 const categories = ref([]);
@@ -109,7 +129,6 @@ const opdBillForm = ref({
 
 async function load() {
   const [
-    patientsRes,
     doctorsRes,
     bedsRes,
     categoriesRes,
@@ -118,7 +137,6 @@ async function load() {
     billTypesRes,
     opdBillTypesRes
   ] = await Promise.all([
-    api.get('/patients'),
     api.get('/doctors'),
     api.get('/ipd/beds'),
     api.get('/document-categories'),
@@ -130,10 +148,10 @@ async function load() {
         opdOnly: true,
         billableOnly: true
       }
-    })
+    }),
+    reload()
   ]);
 
-  rows.value = patientsRes.data;
   doctors.value = doctorsRes.data;
   beds.value = bedsRes.data;
   categories.value = categoriesRes.data;
@@ -398,7 +416,9 @@ onMounted(load);
 
   </div>
 
-  <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all patient fields..." /></div>
+  <div class="grid-filter-row">
+    <GridSearch v-model="searchText" placeholder="Search name, phone, patient code, address, source..." />
+  </div>
 
   <table class="table">
     <tr>
@@ -406,14 +426,14 @@ onMounted(load);
       <th class="sortable" @click="sortBy('name')">Name <span class="sort-indicator">{{ sortIndicator('name') }}</span></th>
       <th class="sortable" @click="sortBy('age')">Age/Gender <span class="sort-indicator">{{ sortIndicator('age') }}</span></th>
       <th class="sortable" @click="sortBy('phone')">Phone <span class="sort-indicator">{{ sortIndicator('phone') }}</span></th>
-      <th class="sortable" @click="sortBy('registrationType')">Type <span class="sort-indicator">{{ sortIndicator('registrationType') }}</span></th>
-      <th class="sortable" @click="sortBy('doctorName')">Doctor <span class="sort-indicator">{{ sortIndicator('doctorName') }}</span></th>
+      <th>Type</th>
+      <th>Doctor</th>
       <th class="sortable" @click="sortBy('marketingSource')">Source <span class="sort-indicator">{{ sortIndicator('marketingSource') }}</span></th>
-      <th class="sortable" @click="sortBy('referrerName')">Referrer <span class="sort-indicator">{{ sortIndicator('referrerName') }}</span></th>
+      <th>Referrer</th>
       <th>Bed / OT</th>
       <th></th>
     </tr>
-    <tr v-for="patient in pagedRows" :key="patient.id">
+    <tr v-for="patient in rows" :key="patient.id">
       <td>{{ patient.patientCode }}</td>
       <td>{{ patient.name }}</td>
       <td>{{ ageText(patient) }} / {{ patient.gender }}</td>
@@ -435,7 +455,7 @@ onMounted(load);
       </td>
     </tr>
   </table>
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page = $event" />
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page = $event" />
 
   <div v-if="show" class="modal-bg">
     <div class="modal modal-lg">

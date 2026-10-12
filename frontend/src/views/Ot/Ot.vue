@@ -3,16 +3,36 @@ import { ref, onMounted } from 'vue';
 import { api } from '../../api';
 import Pagination from '../../components/Pagination.vue';
 import GridSearch from '../../components/GridSearch.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 
-const rows = ref([]);
+const pageSize = 10;
+
 const docs = ref([]);
 const patients = ref([]);
 const show = ref(false);
 const f = ref(blank());
 const err = ref('');
 
-const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(rows, 10);
+// DoctorName isn't a real OtBooking column (OtController resolves it via a
+// bulk dictionary lookup after the fetch), so it's matched via a
+// correlated subquery against Doctors in the backend's default search
+// branch - same trick Bills uses for patientName. No searchColumn is sent -
+// a plain search box matches booking number, OT room, doctor, procedure and
+// status together server-side.
+async function fetchOtPage(params) {
+  const { data } = await api.get('/ot', {
+    params: {
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchOtPage, pageSize);
 
 function blank() {
   return {
@@ -29,8 +49,7 @@ function blank() {
 }
 
 async function load() {
-  const [r, d, p] = await Promise.all([api.get('/ot'), api.get('/doctors'), api.get('/patients')]);
-  rows.value = r.data;
+  const [d, p] = await Promise.all([api.get('/doctors'), api.get('/patients'), reload()]);
   docs.value = d.data;
   patients.value = p.data;
 }
@@ -62,20 +81,22 @@ onMounted(load);
     <button @click="add">+ Book OT</button>
   </div>
 
-  <GridSearch v-model="search" placeholder="Search OT booking, room, doctor, patient, procedure..." />
+  <div class="grid-filter-row">
+    <GridSearch v-model="searchText" placeholder="Search booking number, OT room, doctor, procedure, status..." />
+  </div>
 
   <table class="table">
     <tr>
-      <th>Booking</th>
-      <th>OT</th>
-      <th>Doctor</th>
-      <th>Start</th>
-      <th>End</th>
-      <th>Procedure</th>
-      <th>Doctor Payout</th>
-      <th>Status</th>
+      <th class="sortable" @click="sortBy('bookingNumber')">Booking <span class="sort-indicator">{{ sortIndicator('bookingNumber') }}</span></th>
+      <th class="sortable" @click="sortBy('otRoom')">OT <span class="sort-indicator">{{ sortIndicator('otRoom') }}</span></th>
+      <th class="sortable" @click="sortBy('doctorName')">Doctor <span class="sort-indicator">{{ sortIndicator('doctorName') }}</span></th>
+      <th class="sortable" @click="sortBy('startAtUtc')">Start <span class="sort-indicator">{{ sortIndicator('startAtUtc') }}</span></th>
+      <th class="sortable" @click="sortBy('endAtUtc')">End <span class="sort-indicator">{{ sortIndicator('endAtUtc') }}</span></th>
+      <th class="sortable" @click="sortBy('procedureName')">Procedure <span class="sort-indicator">{{ sortIndicator('procedureName') }}</span></th>
+      <th class="sortable" @click="sortBy('doctorPayoutAmount')">Doctor Payout <span class="sort-indicator">{{ sortIndicator('doctorPayoutAmount') }}</span></th>
+      <th class="sortable" @click="sortBy('status')">Status <span class="sort-indicator">{{ sortIndicator('status') }}</span></th>
     </tr>
-    <tr v-for="x in pagedRows" :key="x.id">
+    <tr v-for="x in rows" :key="x.id">
       <td>{{ x.bookingNumber }}</td>
       <td>{{ x.otRoom }}</td>
       <td>{{ x.doctorName }}</td>
@@ -87,7 +108,7 @@ onMounted(load);
     </tr>
   </table>
 
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="10" @update:page="page = $event" />
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page = $event" />
 
   <div v-if="show" class="modal-bg">
     <div class="modal">

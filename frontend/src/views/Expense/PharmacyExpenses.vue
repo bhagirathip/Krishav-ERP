@@ -3,17 +3,33 @@ import { onMounted, ref } from 'vue';
 import { api } from '../../api';
 import GridSearch from '../../components/GridSearch.vue';
 import Pagination from '../../components/Pagination.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 
-const rows = ref([]);
+const pageSize = 10;
 const payment = ref(null);
 const history = ref([]);
 const staff = ref([]);
-const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(rows, 10);
+
+// No searchColumn - a plain search box matches invoice, distributor and
+// payment type together server-side (see ExpensesController.Pharmacy's
+// default branch), rather than making the user pick a column first.
+async function fetchExpensesPage(params) {
+  const { data } = await api.get('/expenses/pharmacy', {
+    params: {
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows: pagedRows, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchExpensesPage, pageSize);
 
 async function load() {
-  const [r, s] = await Promise.all([api.get('/expenses/pharmacy'), api.get('/staff')]);
-  rows.value = r.data;
+  const [s] = await Promise.all([api.get('/staff'), reload()]);
   staff.value = s.data;
 }
 
@@ -43,10 +59,15 @@ onMounted(load);
 <template>
   <h1>Pharmacy Expenses</h1>
   <div class="muted">Purchase invoices automatically appear here. Record supplier payments as they are made.</div>
-  <GridSearch v-model="search" placeholder="Search invoice, distributor, payment type, amount..." />
+  <div class="grid-filter-row"><GridSearch v-model="searchText" placeholder="Search invoice, distributor, payment type..." /></div>
   <table class="table">
     <tr>
-      <th>Invoice</th><th>Date</th><th>Distributor</th><th>Type</th><th>Total</th><th>Paid</th><th>Outstanding</th><th></th>
+      <th class="sortable" @click="sortBy('invoiceNumber')">Invoice <span class="sort-indicator">{{ sortIndicator('invoiceNumber') }}</span></th>
+      <th class="sortable" @click="sortBy('invoiceDate')">Date <span class="sort-indicator">{{ sortIndicator('invoiceDate') }}</span></th>
+      <th class="sortable" @click="sortBy('distributorName')">Distributor <span class="sort-indicator">{{ sortIndicator('distributorName') }}</span></th>
+      <th class="sortable" @click="sortBy('paymentType')">Type <span class="sort-indicator">{{ sortIndicator('paymentType') }}</span></th>
+      <th class="sortable" @click="sortBy('totalAmount')">Total <span class="sort-indicator">{{ sortIndicator('totalAmount') }}</span></th>
+      <th>Paid</th><th>Outstanding</th><th></th>
     </tr>
     <tr v-for="row in pagedRows" :key="row.id">
       <td>{{ row.invoiceNumber }}</td>
@@ -59,7 +80,7 @@ onMounted(load);
       <td><button @click="open(row)">Manage Payment</button></td>
     </tr>
   </table>
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="10" @update:page="page=$event" />
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page=$event" />
 
   <div v-if="payment" class="modal-bg">
     <div class="modal modal-lg">

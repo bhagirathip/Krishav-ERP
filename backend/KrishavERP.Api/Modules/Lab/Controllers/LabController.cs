@@ -100,26 +100,98 @@ public class LabController : ControllerBase
     }
 
     [HttpGet("orders")]
-    public async Task<IActionResult> Orders()
+    public async Task<IActionResult> Orders(
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText)
     {
-        var rows = await (
-            from order in _db.LabOrders
-            join patient in _db.Patients on order.PatientId equals patient.Id
-            select new
-            {
-                order.Id,
-                order.OrderNumber,
-                order.PatientId,
-                PatientName = patient.Name,
-                patient.PatientCode,
-                order.CreatedAtUtc,
-                order.Status,
-                TestCount = order.Tests.Count
-            })
-            .OrderByDescending(x => x.Id)
-            .ToListAsync();
+        var query = _db.LabOrders.AsQueryable();
 
-        return Ok(rows);
+        // patientName is resolved via a correlated EXISTS subquery against
+        // Patients (same approach BillsController uses for its own
+        // patientName search) so it still runs as real SQL rather than
+        // pulling everything into memory first.
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "patientName" => query.Where(x => _db.Patients.Any(p => p.Id == x.PatientId && p.Name.Contains(searchText))),
+                "status" => query.Where(x => x.Status.Contains(searchText)),
+                "orderNumber" => query.Where(x => x.OrderNumber.Contains(searchText)),
+                // No column specified - the Patient Lab Tests grid uses a
+                // single plain search box, not a column picker, so match any
+                // of the fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    x.OrderNumber.Contains(searchText)
+                    || x.Status.Contains(searchText)
+                    || _db.Patients.Any(p => p.Id == x.PatientId && p.Name.Contains(searchText)))
+            };
+        }
+
+        // patientName and testCount aren't sorted here, same restraint
+        // BillsController takes with its own joined/aggregated display-only
+        // fields (patientName/doctorName/referrerName, RefundedAmount) -
+        // patientName only has a Name column via a join (no FK navigation to
+        // order it by directly) and testCount is an aggregate over the
+        // Tests child collection, not a real LabOrder column.
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "orderNumber" => descending ? query.OrderByDescending(x => x.OrderNumber) : query.OrderBy(x => x.OrderNumber),
+            "createdAtUtc" => descending ? query.OrderByDescending(x => x.CreatedAtUtc) : query.OrderBy(x => x.CreatedAtUtc),
+            "status" => descending ? query.OrderByDescending(x => x.Status) : query.OrderBy(x => x.Status),
+            _ => query.OrderByDescending(x => x.Id)
+        };
+
+        // Paging is opt-in via `page` - the Patient Lab Tests grid is the
+        // only current caller, but this keeps the same opt-in shape as
+        // Patients/Bills in case another screen ever reads this endpoint as
+        // a full-array source.
+        List<LabOrder> orders;
+        int totalCount;
+        if (page.HasValue)
+        {
+            var paged = await query.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            orders = paged.Rows;
+            totalCount = paged.TotalCount;
+        }
+        else
+        {
+            orders = await query.ToListAsync();
+            totalCount = orders.Count;
+        }
+
+        var patientIds = orders.Select(x => x.PatientId).Distinct().ToList();
+        var patients = await _db.Patients.Where(x => patientIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id);
+
+        var orderIds = orders.Select(x => x.Id).ToList();
+        var testCounts = await _db.LabOrderTests
+            .Where(x => orderIds.Contains(x.LabOrderId))
+            .GroupBy(x => x.LabOrderId)
+            .Select(g => new { OrderId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.OrderId, x => x.Count);
+
+        var shaped = orders.Select(order => new
+        {
+            order.Id,
+            order.OrderNumber,
+            order.PatientId,
+            PatientName = patients.TryGetValue(order.PatientId, out var patient) ? patient.Name : "",
+            PatientCode = patients.TryGetValue(order.PatientId, out var patientCodeValue) ? patientCodeValue.PatientCode : "",
+            order.CreatedAtUtc,
+            order.Status,
+            TestCount = testCounts.TryGetValue(order.Id, out var count) ? count : 0
+        }).ToList();
+
+        if (page.HasValue)
+        {
+            return Ok(new { rows = shaped, totalCount });
+        }
+
+        return Ok(shaped);
     }
 
     [HttpPost("orders")]

@@ -5,6 +5,16 @@ public class PaymentRequest
     public decimal Amount { get; set; }
     public string Mode { get; set; } = "Cash";
     public string? Reference { get; set; }
+
+    // Defaults to now, but can be backdated to catch up on a payment that
+    // was actually received earlier - never allowed into the future (see
+    // BillsController.Pay).
+    public DateTime? PaidAtUtc { get; set; }
+}
+
+public class UpdatePaymentDateRequest
+{
+    public DateTime PaidAtUtc { get; set; }
 }
 
 public class BillCreateRequest

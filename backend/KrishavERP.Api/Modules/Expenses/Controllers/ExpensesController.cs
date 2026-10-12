@@ -1,4 +1,5 @@
 using KrishavERP.Api;
+using KrishavERP.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -90,16 +91,66 @@ public class ExpensesController : ControllerBase
         return Ok();
     }
 
+    // Only the Pharmacy Expenses grid reads this endpoint (no other screen
+    // uses it as a full-array dropdown/autocomplete source), so paging is
+    // always applied rather than being opt-in. PaidAmount/Outstanding are
+    // computed by summing PharmacyPurchasePayments per invoice after the
+    // page is fetched (same shape as the previous implementation, just
+    // scoped to the current page's invoices instead of every payment ever
+    // made) - that join-and-sum can't be pushed into the SQL ORDER BY/WHERE
+    // without real risk, so (per the Patients precedent for columns that
+    // are computed post-fetch) those two columns are left without
+    // sort/search support in the frontend grid.
     [HttpGet("pharmacy")]
-    public async Task<IActionResult> Pharmacy()
+    public async Task<IActionResult> Pharmacy(
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection)
     {
-        var invoices = await _db.PharmacyPurchaseInvoices
+        var query = _db.PharmacyPurchaseInvoices
             .Where(x => !x.IsDeleted)
             .Include(x => x.Distributor)
-            .OrderByDescending(x => x.InvoiceDate)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "distributorName" => query.Where(x => x.Distributor != null && x.Distributor.Name.Contains(searchText)),
+                "paymentType" => query.Where(x => x.PaymentType.Contains(searchText)),
+                "invoiceNumber" => query.Where(x => x.InvoiceNumber.Contains(searchText)),
+                // No column specified - the Pharmacy Expenses grid uses a
+                // single plain search box, not a column picker, so match any
+                // of the fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    x.InvoiceNumber.Contains(searchText)
+                    || x.PaymentType.Contains(searchText)
+                    || (x.Distributor != null && x.Distributor.Name.Contains(searchText)))
+            };
+        }
+
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "invoiceNumber" => descending ? query.OrderByDescending(x => x.InvoiceNumber) : query.OrderBy(x => x.InvoiceNumber),
+            "invoiceDate" => descending ? query.OrderByDescending(x => x.InvoiceDate) : query.OrderBy(x => x.InvoiceDate),
+            "distributorName" => descending ? query.OrderByDescending(x => x.Distributor!.Name) : query.OrderBy(x => x.Distributor!.Name),
+            "paymentType" => descending ? query.OrderByDescending(x => x.PaymentType) : query.OrderBy(x => x.PaymentType),
+            "totalAmount" => descending ? query.OrderByDescending(x => x.TotalAmount) : query.OrderBy(x => x.TotalAmount),
+            _ => query.OrderByDescending(x => x.InvoiceDate)
+        };
+
+        var paged = await query.ToPagedResultAsync(page ?? 1, pageSize ?? 10);
+
+        var invoiceIds = paged.Rows.Select(x => x.Id).ToList();
+        var payments = await _db.PharmacyPurchasePayments
+            .Where(x => invoiceIds.Contains(x.PurchaseInvoiceId))
             .ToListAsync();
-        var payments = await _db.PharmacyPurchasePayments.ToListAsync();
-        return Ok(invoices.Select(x =>
+
+        var rows = paged.Rows.Select(x =>
         {
             var paid = payments.Where(p => p.PurchaseInvoiceId == x.Id).Sum(p => p.Amount);
             return new
@@ -110,7 +161,9 @@ public class ExpensesController : ControllerBase
                 PaidAmount = paid,
                 Outstanding = Math.Max(0, x.TotalAmount - paid)
             };
-        }));
+        });
+
+        return Ok(new { rows, totalCount = paged.TotalCount });
     }
 
     [HttpGet("pharmacy/{invoiceId:int}/payments")]
@@ -159,20 +212,93 @@ public class ExpensesController : ControllerBase
     }
 
     [HttpGet("lab")]
-    public async Task<IActionResult> Lab([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    public async Task<IActionResult> Lab(
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText)
     {
         var query = _db.LabPurchaseExpenses.AsQueryable();
         if (from.HasValue) query = query.Where(x => x.ExpenseDate >= from.Value.Date);
         if (to.HasValue) query = query.Where(x => x.ExpenseDate < to.Value.Date.AddDays(1));
-        var rows = await query.OrderByDescending(x => x.ExpenseDate).ThenByDescending(x => x.Id).ToListAsync();
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "invoiceNumber" => query.Where(x => x.InvoiceNumber != null && x.InvoiceNumber.Contains(searchText)),
+                "description" => query.Where(x => x.Description.Contains(searchText)),
+                "vendorName" => query.Where(x => x.VendorName != null && x.VendorName.Contains(searchText)),
+                // No column specified - the Lab Expenses grid uses a single
+                // plain search box, not a column picker, so match any of the
+                // fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    (x.VendorName != null && x.VendorName.Contains(searchText))
+                    || (x.InvoiceNumber != null && x.InvoiceNumber.Contains(searchText))
+                    || x.Description.Contains(searchText))
+            };
+        }
+
+        // PaidByStaffName isn't sorted here - like Patients'/Bills' own
+        // dictionary-resolved display fields (doctorName, referrerName, ...)
+        // it's only known after the staff lookup below, not a real column on
+        // LabPurchaseExpense. "outstanding" (Amount - PaidAmount) is plain
+        // arithmetic over two real columns, so it still translates to a
+        // normal SQL ORDER BY.
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "vendorName" => descending ? query.OrderByDescending(x => x.VendorName) : query.OrderBy(x => x.VendorName),
+            "invoiceNumber" => descending ? query.OrderByDescending(x => x.InvoiceNumber) : query.OrderBy(x => x.InvoiceNumber),
+            "description" => descending ? query.OrderByDescending(x => x.Description) : query.OrderBy(x => x.Description),
+            "amount" => descending ? query.OrderByDescending(x => x.Amount) : query.OrderBy(x => x.Amount),
+            "paidAmount" => descending ? query.OrderByDescending(x => x.PaidAmount) : query.OrderBy(x => x.PaidAmount),
+            "outstanding" => descending ? query.OrderByDescending(x => x.Amount - x.PaidAmount) : query.OrderBy(x => x.Amount - x.PaidAmount),
+            _ => query.OrderByDescending(x => x.ExpenseDate).ThenByDescending(x => x.Id)
+        };
+
+        // The "Total Lab Purchases" footer box sums every row matching the
+        // current filters/search, not just the current page - computed from
+        // the same filtered query before paging is applied.
+        var totalAmount = await query.SumAsync(x => (decimal?)x.Amount) ?? 0;
+
+        // Paging is opt-in via `page` - this endpoint is only called by the
+        // Lab Expenses grid today, but kept opt-in to match the
+        // Patients/Bills pattern in case something else ever reads it as a
+        // full-array source.
+        List<LabPurchaseExpense> rows;
+        int totalCount;
+        if (page.HasValue)
+        {
+            var paged = await query.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            rows = paged.Rows;
+            totalCount = paged.TotalCount;
+        }
+        else
+        {
+            rows = await query.ToListAsync();
+            totalCount = rows.Count;
+        }
+
         var staff = await StaffMap(rows.Select(x => x.PaidByStaffId));
-        return Ok(rows.Select(x => new
+        var shaped = rows.Select(x => new
         {
             x.Id, x.ExpenseDate, x.VendorName, x.InvoiceNumber, x.Description, x.Amount, x.PaidAmount,
             x.PaymentDate, x.PaymentMode, x.ReferenceNumber, x.Notes, x.PaidByStaffId,
             PaidByStaffName = x.PaidByStaffId.HasValue && staff.TryGetValue(x.PaidByStaffId.Value, out var n) ? n : "",
             x.CreatedAtUtc
-        }));
+        }).ToList();
+
+        if (page.HasValue)
+        {
+            return Ok(new { rows = shaped, totalCount, totalAmount });
+        }
+
+        return Ok(shaped);
     }
 
     [HttpPost("lab")]

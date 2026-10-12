@@ -4,7 +4,7 @@ import { api, assetUrl } from '../../api';
 import { can } from '../../auth';
 import Pagination from '../../components/Pagination.vue';
 import GridSearch from '../../components/GridSearch.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 import { ageText } from '../../utils/age';
 import { looksLikeHtml, legacyNoteToHtml, sanitizeNoteHtml } from '../../utils/richNote';
 import PatientTestOrderModal from './components/PatientTestOrderModal.vue';
@@ -12,7 +12,6 @@ import PatientOrderTestsModal from './components/PatientOrderTestsModal.vue';
 import PatientTestResultModal from './components/PatientTestResultModal.vue';
 
 const tests = ref([]);
-const orders = ref([]);
 const patients = ref([]);
 const discounts = ref([]);
 const showOrder = ref(false);
@@ -23,7 +22,29 @@ const orderTests = ref([]);
 const resultData = ref(null);
 
 const pageSize = 10;
-const { search, page, pageCount, pagedRows: pagedOrders, sortedRows, sortBy, sortIndicator } = useGrid(orders, pageSize);
+
+// No searchColumn - a plain search box matches order number, patient name
+// and status together server-side (see LabController.Orders' default
+// branch), rather than making the user pick a column first. patientName is
+// resolved server-side via a correlated subquery against Patients (same
+// technique Bills uses for its own patientName search), so it's searchable
+// but - like Bills' own joined display fields - not sorted; testCount is an
+// aggregate over each order's Tests, not a real LabOrder column, so it isn't
+// sortable either.
+async function fetchOrdersPage(params) {
+  const { data } = await api.get('/lab/orders', {
+    params: {
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows: pagedOrders, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchOrdersPage, pageSize);
 
 // The test note is now rich HTML (or, for tests saved before that editor
 // shipped, still the old plain-text convention) - render it the same way
@@ -31,14 +52,13 @@ const { search, page, pageCount, pagedRows: pagedOrders, sortedRows, sortBy, sor
 const resultNoteHtml = computed(() => noteDisplayHtml(resultData.value?.testNote));
 
 async function load() {
-  const [t, o, p, d] = await Promise.all([
+  const [t, p, d] = await Promise.all([
     api.get('/lab/tests'),
-    api.get('/lab/orders'),
     api.get('/patients'),
-    api.get('/discounts', { params: { scope: 'Individual', activeOnly: true } })
+    api.get('/discounts', { params: { scope: 'Individual', activeOnly: true } }),
+    reload()
   ]);
   tests.value = t.data;
-  orders.value = o.data;
   patients.value = p.data;
   discounts.value = d.data;
 }
@@ -670,7 +690,7 @@ onMounted(load);
     <button v-if="can('LAB_PATIENT_TESTS','add')" @click="newOrder">+ Add Test Patient</button>
   </div>
   <div class="grid-filter-row">
-    <GridSearch v-model="search" placeholder="Search all patient lab order fields..." />
+    <GridSearch v-model="searchText" placeholder="Search order number, patient, status..." />
   </div>
 
   <table class="table">
@@ -678,15 +698,11 @@ onMounted(load);
       <th class="sortable" @click="sortBy('orderNumber')">
         Order <span class="sort-indicator">{{ sortIndicator('orderNumber') }}</span>
       </th>
-      <th class="sortable" @click="sortBy('patientName')">
-        Patient <span class="sort-indicator">{{ sortIndicator('patientName') }}</span>
-      </th>
+      <th>Patient</th>
       <th class="sortable" @click="sortBy('createdAtUtc')">
         Date <span class="sort-indicator">{{ sortIndicator('createdAtUtc') }}</span>
       </th>
-      <th class="sortable" @click="sortBy('testCount')">
-        Tests <span class="sort-indicator">{{ sortIndicator('testCount') }}</span>
-      </th>
+      <th>Tests</th>
       <th class="sortable" @click="sortBy('status')">
         Status <span class="sort-indicator">{{ sortIndicator('status') }}</span>
       </th>
@@ -708,7 +724,7 @@ onMounted(load);
       </td>
     </tr>
   </table>
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page=$event" />
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page=$event" />
 
   <PatientTestOrderModal
     v-if="showOrder"

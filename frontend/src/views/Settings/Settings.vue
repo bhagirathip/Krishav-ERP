@@ -12,7 +12,7 @@ const form = ref({ name: '', value: '', type: 'Billing', isActive: true });
 const imageFile = ref(null);
 const pageSize = 10;
 const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(rows, pageSize);
-const headerNames = ['OPD Header', 'Hospital Logo', 'Lab Header', 'Pharmacy Header', 'Lab Signature'];
+const headerNames = ['OPD Header', 'Blank Prescription Header', 'Hospital Logo', 'Trust Logo', 'Lab Header', 'Pharmacy Header', 'Lab Signature'];
 
 // A re-uploaded image keeps the exact same stored path/filename, so the
 // browser would otherwise keep showing the old cached picture right here on

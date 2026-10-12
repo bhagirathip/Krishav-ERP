@@ -45,6 +45,9 @@ public class AppDbContext : DbContext
     public DbSet<PharmacyPurchaseItem> PharmacyPurchaseItems => Set<PharmacyPurchaseItem>();
     public DbSet<PharmacySale> PharmacySales => Set<PharmacySale>();
     public DbSet<PharmacySaleItem> PharmacySaleItems => Set<PharmacySaleItem>();
+    public DbSet<HospitalIssue> HospitalIssues => Set<HospitalIssue>();
+    public DbSet<HospitalIssueItem> HospitalIssueItems => Set<HospitalIssueItem>();
+    public DbSet<HospitalSettlement> HospitalSettlements => Set<HospitalSettlement>();
     public DbSet<PharmacyExpiryAction> PharmacyExpiryActions => Set<PharmacyExpiryAction>();
     public DbSet<LabTest> LabTests => Set<LabTest>();
     public DbSet<LabTestComponent> LabTestComponents => Set<LabTestComponent>();
@@ -178,6 +181,12 @@ public class AppDbContext : DbContext
         b.Entity<PharmacySaleItem>().Property(x => x.TotalAmount).HasPrecision(18, 2);
         b.Entity<PharmacySaleItem>().Property(x => x.CgstPercent).HasPrecision(8, 2);
         b.Entity<PharmacySaleItem>().Property(x => x.SgstPercent).HasPrecision(8, 2);
+
+        b.Entity<HospitalIssue>().Property(x => x.TotalAmount).HasPrecision(18, 2);
+        b.Entity<HospitalIssueItem>().Property(x => x.Mrp).HasPrecision(18, 2);
+        b.Entity<HospitalIssueItem>().Property(x => x.UnitPrice).HasPrecision(18, 4);
+        b.Entity<HospitalIssueItem>().Property(x => x.TotalAmount).HasPrecision(18, 2);
+        b.Entity<HospitalSettlement>().Property(x => x.TotalAmount).HasPrecision(18, 2);
         b.Entity<PharmacyExpiryAction>().Property(x => x.Amount).HasPrecision(18, 2);
 
         b.Entity<PharmacyPurchaseInvoice>()

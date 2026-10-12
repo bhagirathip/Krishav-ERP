@@ -72,6 +72,24 @@ function typeChanged(row) {
   }
 }
 
+// "10s" (also "10 S" / "10'S") is the common packing shorthand for "10
+// tablets per strip" - auto-fill Tablet/Strip from it so the pharmacist
+// doesn't have to type the same number twice. Only touches the clear,
+// unambiguous "<number>s" pattern - multi-number formats like "10X10" are
+// read differently by different people (strips-of-tablets vs tablets-of-
+// strips) and aren't worth guessing wrong on a field that drives stock math.
+// The Tablet/Strip field right next to it stays fully editable either way.
+function parseTabletsPerStrip(packing) {
+  const match = String(packing || '').trim().match(/^(\d+)\s*'?s$/i);
+  return match ? Number(match[1]) : null;
+}
+
+function packingChanged(row) {
+  if (['Cream', 'Spray'].includes(typeName(row))) return;
+  const parsed = parseTabletsPerStrip(row.packing);
+  if (parsed) row.tabletsPerStrip = parsed;
+}
+
 function calculate(row) {
   const base = Number(row.rate || 0) * Number(row.quantity || 0);
   const discount = Math.min(base, Math.max(0, Number(row.discountAmount || 0)));
@@ -249,7 +267,7 @@ async function saveInvoice() {
             <td><input v-model="row.manufacturer"></td>
             <td><input v-model="row.hsn"></td>
             <td><input v-model="row.productName"></td>
-            <td><input v-model="row.packing"></td>
+            <td><input v-model="row.packing" @input="packingChanged(row)"></td>
             <td><input v-model="row.batchNo"></td>
             <td><input type="date" v-model="row.expiryDate"></td>
             <td><input type="number" min="0" step="0.01" v-model.number="row.mrp"></td>

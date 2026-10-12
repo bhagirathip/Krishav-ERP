@@ -92,7 +92,13 @@ public class ReferralsController : ControllerBase
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
         [FromQuery] int? referrerId,
-        [FromQuery] string? department)
+        [FromQuery] string? department,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText)
     {
         var start = (from ?? DateTime.Today).Date;
         var end = (to ?? DateTime.Today).Date.AddDays(1);
@@ -109,6 +115,10 @@ public class ReferralsController : ControllerBase
             .ToListAsync();
 
         var result = new List<object>();
+        // Built alongside `result` so the Payouts grid's paged/flattened view
+        // (one row per referrer+patient) never has to be re-derived from the
+        // nested shape - it's just assembled directly in the same loop below.
+        var flatRows = new List<ReferralPayoutRow>();
 
         foreach (var r in refs)
         {
@@ -152,6 +162,25 @@ public class ReferralsController : ControllerBase
                     ReferenceNumber = payout?.ReferenceNumber ?? "",
                     PayoutNotes = payout?.Notes ?? ""
                 });
+
+                flatRows.Add(new ReferralPayoutRow
+                {
+                    PatientId = p.Id,
+                    PatientCode = p.PatientCode,
+                    Name = p.Name,
+                    Phone = p.Phone,
+                    MarketingSource = p.MarketingSource,
+                    Income = income,
+                    TotalIncome = total,
+                    ApprovedPayout = payout?.Amount ?? 0,
+                    PaymentDate = payout?.PaymentDate,
+                    PaymentMode = payout?.PaymentMode ?? "",
+                    ReferenceNumber = payout?.ReferenceNumber ?? "",
+                    PayoutNotes = payout?.Notes ?? "",
+                    ReferrerId = r.Id,
+                    ReferrerCode = r.ReferrerCode,
+                    ReferrerName = r.Name
+                });
             }
 
             result.Add(new
@@ -167,7 +196,90 @@ public class ReferralsController : ControllerBase
             });
         }
 
-        return Ok(new { CanApprovePayout = await IsAdministrator(), Categories = categories, Rows = result });
+        var canApprovePayout = await IsAdministrator();
+
+        // Paging is opt-in via `page` - Master/Referrals.vue calls this same
+        // endpoint (to show each referrer's referred-patient count) without
+        // `page` and needs the original nested { rows: [ { ..., patients: []
+        // } ] } shape back unchanged. Only the Payouts grid passes `page`, in
+        // which case rows[].patients is flattened into one row per referrer+
+        // patient (the same flattening the Payouts grid used to do client-
+        // side) and that flattened list is searched/sorted/paginated instead.
+        if (!page.HasValue)
+        {
+            return Ok(new { CanApprovePayout = canApprovePayout, Categories = categories, Rows = result });
+        }
+
+        IEnumerable<ReferralPayoutRow> filtered = flatRows;
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            filtered = searchColumn switch
+            {
+                "referrerName" => filtered.Where(x => x.ReferrerName.Contains(searchText, StringComparison.OrdinalIgnoreCase)),
+                "marketingSource" => filtered.Where(x => (x.MarketingSource ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)),
+                "phone" => filtered.Where(x => (x.Phone ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)),
+                "patientCode" => filtered.Where(x => (x.PatientCode ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)),
+                // No column specified - the Payouts grid uses a single plain
+                // search box, not a column picker, so match any of the fields
+                // it used to offer in that dropdown.
+                _ => filtered.Where(x =>
+                    x.ReferrerName.Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                    || x.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                    || (x.MarketingSource ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                    || (x.Phone ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                    || (x.PatientCode ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            };
+        }
+
+        var descending = sortDirection == "desc";
+        filtered = sortBy switch
+        {
+            "name" => descending ? filtered.OrderByDescending(x => x.Name) : filtered.OrderBy(x => x.Name),
+            "marketingSource" => descending ? filtered.OrderByDescending(x => x.MarketingSource) : filtered.OrderBy(x => x.MarketingSource),
+            "totalIncome" => descending ? filtered.OrderByDescending(x => x.TotalIncome) : filtered.OrderBy(x => x.TotalIncome),
+            "approvedPayout" => descending ? filtered.OrderByDescending(x => x.ApprovedPayout) : filtered.OrderBy(x => x.ApprovedPayout),
+            "paymentDate" => descending ? filtered.OrderByDescending(x => x.PaymentDate) : filtered.OrderBy(x => x.PaymentDate),
+            "paymentMode" => descending ? filtered.OrderByDescending(x => x.PaymentMode) : filtered.OrderBy(x => x.PaymentMode),
+            "referenceNumber" => descending ? filtered.OrderByDescending(x => x.ReferenceNumber) : filtered.OrderBy(x => x.ReferenceNumber),
+            "referrerName" => descending ? filtered.OrderByDescending(x => x.ReferrerName) : filtered.OrderBy(x => x.ReferrerName),
+            _ => descending ? filtered.OrderByDescending(x => x.ReferrerName) : filtered.OrderBy(x => x.ReferrerName)
+        };
+
+        var materialized = filtered.ToList();
+        var clampedPageSize = Math.Clamp(pageSize ?? 10, 1, 200);
+        var clampedPage = Math.Max(1, page.Value);
+        var pageRows = materialized
+            .Skip((clampedPage - 1) * clampedPageSize)
+            .Take(clampedPageSize)
+            .ToList();
+
+        return Ok(new
+        {
+            CanApprovePayout = canApprovePayout,
+            Categories = categories,
+            Rows = pageRows,
+            TotalCount = materialized.Count
+        });
+    }
+
+    private sealed class ReferralPayoutRow
+    {
+        public int PatientId { get; set; }
+        public string PatientCode { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public string? MarketingSource { get; set; }
+        public Dictionary<string, decimal> Income { get; set; } = new();
+        public decimal TotalIncome { get; set; }
+        public decimal ApprovedPayout { get; set; }
+        public DateTime? PaymentDate { get; set; }
+        public string PaymentMode { get; set; } = "";
+        public string ReferenceNumber { get; set; } = "";
+        public string PayoutNotes { get; set; } = "";
+        public int ReferrerId { get; set; }
+        public string ReferrerCode { get; set; } = "";
+        public string ReferrerName { get; set; } = "";
     }
 
     [HttpPost("payout")]

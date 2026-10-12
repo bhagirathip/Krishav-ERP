@@ -1,17 +1,48 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { api } from '../../api';
 import GridSearch from '../../components/GridSearch.vue';
 import Pagination from '../../components/Pagination.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 
 const today = new Date().toISOString().slice(0, 10);
-const rows = ref([]);
+const pageSize = 10;
 const staff = ref([]);
 const show = ref(false);
 const form = ref(blank());
-const { search, page, pageCount, pagedRows, sortedRows } = useGrid(rows, 10);
-const total = computed(() => rows.value.reduce((s, x) => s + Number(x.amount || 0), 0));
+const totalAmount = ref(0);
+
+// The endpoint already accepted from/to, but this screen never sent them -
+// it always got the full unfiltered purchase history. allDates defaults to
+// true to keep that same "everything" view by default; unchecking it lets
+// the user narrow to a date range like Bills.vue does.
+const allDates = ref(true);
+const dateFrom = ref(today);
+const dateTo = ref(today);
+
+// No searchColumn - a plain search box matches vendor, invoice number and
+// description together server-side (see ExpensesController.Lab's default
+// branch), rather than making the user pick a column first. paidByStaffName
+// is resolved via a post-fetch dictionary lookup (same as Patients'/Bills'
+// own joined display fields), not a real LabPurchaseExpense column, so it
+// isn't sortable/searchable here.
+async function fetchLabExpensesPage(params) {
+  const dateParams = allDates.value ? {} : { from: dateFrom.value, to: dateTo.value };
+  const { data } = await api.get('/expenses/lab', {
+    params: {
+      ...dateParams,
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  totalAmount.value = data.totalAmount;
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows: pagedRows, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchLabExpensesPage, pageSize);
 
 function blank() {
   return {
@@ -31,8 +62,7 @@ function blank() {
 }
 
 async function load() {
-  const [r, s] = await Promise.all([api.get('/expenses/lab'), api.get('/staff')]);
-  rows.value = r.data;
+  const [s] = await Promise.all([api.get('/staff'), reload()]);
   staff.value = s.data;
 }
 
@@ -71,10 +101,29 @@ onMounted(load);
   <div class="toolbar">
     <button @click="add">+ Add Lab Purchase</button>
   </div>
-  <GridSearch v-model="search" placeholder="Search vendor, invoice, item, amount, payment..." />
+
+  <div class="toolbar report-filter">
+    <label class="toggle-row"><input type="checkbox" v-model="allDates" @change="load"> All Dates</label>
+    <label v-if="!allDates">From<input type="date" v-model="dateFrom"></label>
+    <label v-if="!allDates">To<input type="date" v-model="dateTo"></label>
+    <button v-if="!allDates" @click="load">Apply</button>
+  </div>
+
+  <div class="grid-filter-row">
+    <GridSearch v-model="searchText" placeholder="Search vendor, invoice, description..." />
+  </div>
+
   <table class="table">
     <tr>
-      <th>Date</th><th>Vendor</th><th>Invoice</th><th>Description</th><th>Amount</th><th>Paid</th><th>Paid By</th><th>Outstanding</th><th></th>
+      <th class="sortable" @click="sortBy('expenseDate')">Date <span class="sort-indicator">{{ sortIndicator('expenseDate') }}</span></th>
+      <th class="sortable" @click="sortBy('vendorName')">Vendor <span class="sort-indicator">{{ sortIndicator('vendorName') }}</span></th>
+      <th class="sortable" @click="sortBy('invoiceNumber')">Invoice <span class="sort-indicator">{{ sortIndicator('invoiceNumber') }}</span></th>
+      <th class="sortable" @click="sortBy('description')">Description <span class="sort-indicator">{{ sortIndicator('description') }}</span></th>
+      <th class="sortable" @click="sortBy('amount')">Amount <span class="sort-indicator">{{ sortIndicator('amount') }}</span></th>
+      <th class="sortable" @click="sortBy('paidAmount')">Paid <span class="sort-indicator">{{ sortIndicator('paidAmount') }}</span></th>
+      <th>Paid By</th>
+      <th class="sortable" @click="sortBy('outstanding')">Outstanding <span class="sort-indicator">{{ sortIndicator('outstanding') }}</span></th>
+      <th></th>
     </tr>
     <tr v-for="row in pagedRows" :key="row.id">
       <td>{{ String(row.expenseDate).slice(0, 10) }}</td>
@@ -91,8 +140,8 @@ onMounted(load);
       </td>
     </tr>
   </table>
-  <div class="bill-total-box"><div class="grand"><span>Total Lab Purchases</span><b>₹{{ total.toFixed(2) }}</b></div></div>
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="10" @update:page="page=$event" />
+  <div class="bill-total-box"><div class="grand"><span>Total Lab Purchases</span><b>₹{{ totalAmount.toFixed(2) }}</b></div></div>
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page=$event" />
 
   <div v-if="show" class="modal-bg">
     <div class="modal modal-lg">

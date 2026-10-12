@@ -31,7 +31,14 @@ public class BillsController : ControllerBase
     public async Task<IActionResult> Get(
         [FromQuery] string status = "Unpaid",
         [FromQuery] DateTime? from = null,
-        [FromQuery] DateTime? to = null)
+        [FromQuery] DateTime? to = null,
+        [FromQuery] string? billType = null,
+        [FromQuery] int? page = null,
+        [FromQuery] int? pageSize = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDirection = null,
+        [FromQuery] string? searchColumn = null,
+        [FromQuery] string? searchText = null)
     {
         var query = _db.Bills
             .Include(x => x.Items)
@@ -44,8 +51,65 @@ public class BillsController : ControllerBase
 
         if (from.HasValue) query = query.Where(x => x.BillDate >= from.Value.Date);
         if (to.HasValue) query = query.Where(x => x.BillDate < to.Value.Date.AddDays(1));
+        if (!string.IsNullOrWhiteSpace(billType)) query = query.Where(x => x.BillType == billType);
 
-        var bills = await query.OrderByDescending(x => x.Id).ToListAsync();
+        // patientName/referrerName/doctorName below are resolved via bulk
+        // dictionary lookups after the fetch (not EF navigation properties),
+        // so a plain .Where(x => x.Patient.Name...) isn't available - a
+        // correlated EXISTS subquery is used instead for patient name search
+        // so it can still run as real SQL rather than pulling everything
+        // into memory first.
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "patientName" => query.Where(x =>
+                    (x.PatientId.HasValue && _db.Patients.Any(p => p.Id == x.PatientId.Value && p.Name.Contains(searchText)))
+                    || (!x.PatientId.HasValue && x.WalkInPatientName != null && x.WalkInPatientName.Contains(searchText))),
+                "status" => query.Where(x => x.Status.Contains(searchText)),
+                "billNumber" => query.Where(x => x.BillNumber.Contains(searchText)),
+                // No column specified - the Bills grid uses a single plain
+                // search box, not a column picker, so match any of the
+                // fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    x.BillNumber.Contains(searchText)
+                    || x.Status.Contains(searchText)
+                    || (x.PatientId.HasValue && _db.Patients.Any(p => p.Id == x.PatientId.Value && p.Name.Contains(searchText)))
+                    || (!x.PatientId.HasValue && x.WalkInPatientName != null && x.WalkInPatientName.Contains(searchText)))
+            };
+        }
+
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "billNumber" => descending ? query.OrderByDescending(x => x.BillNumber) : query.OrderBy(x => x.BillNumber),
+            "billType" => descending ? query.OrderByDescending(x => x.BillType) : query.OrderBy(x => x.BillType),
+            "grossAmount" => descending ? query.OrderByDescending(x => x.GrossAmount) : query.OrderBy(x => x.GrossAmount),
+            "discountAmount" => descending ? query.OrderByDescending(x => x.DiscountAmount) : query.OrderBy(x => x.DiscountAmount),
+            "netAmount" => descending ? query.OrderByDescending(x => x.NetAmount) : query.OrderBy(x => x.NetAmount),
+            "paidAmount" => descending ? query.OrderByDescending(x => x.PaidAmount) : query.OrderBy(x => x.PaidAmount),
+            "status" => descending ? query.OrderByDescending(x => x.Status) : query.OrderBy(x => x.Status),
+            _ => query.OrderByDescending(x => x.Id)
+        };
+
+        // Paging is opt-in via `page` - the Bills grid's "Group by Patient"
+        // view needs every matching bill at once (grouping a patient's bills
+        // across pages makes no sense), so it calls this same endpoint
+        // without `page` and gets the full filtered array back instead.
+        List<Bill> bills;
+        int totalCount;
+        if (page.HasValue)
+        {
+            var paged = await query.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            bills = paged.Rows;
+            totalCount = paged.TotalCount;
+        }
+        else
+        {
+            bills = await query.ToListAsync();
+            totalCount = bills.Count;
+        }
+
         var patientIds = bills.Where(x => x.PatientId.HasValue).Select(x => x.PatientId!.Value).Distinct().ToList();
         var doctorIds = bills.Where(x => x.DoctorId.HasValue).Select(x => x.DoctorId!.Value).Distinct().ToList();
         var referrerIds = bills.Where(x => x.ReferrerId.HasValue).Select(x => x.ReferrerId!.Value).Distinct().ToList();
@@ -54,7 +118,7 @@ public class BillsController : ControllerBase
         var doctors = await _db.Doctors.Where(x => doctorIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id);
         var referrers = await _db.Referrers.Where(x => referrerIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id);
 
-        return Ok(bills.Select(bill => new
+        var shaped = bills.Select(bill => new
         {
             bill.Id,
             bill.BillNumber,
@@ -81,7 +145,14 @@ public class BillsController : ControllerBase
             bill.BillDate,
             bill.Items,
             bill.Payments
-        }));
+        }).ToList();
+
+        if (page.HasValue)
+        {
+            return Ok(new { rows = shaped, totalCount });
+        }
+
+        return Ok(shaped);
     }
 
     [HttpGet("catalog")]
@@ -424,12 +495,35 @@ public class BillsController : ControllerBase
         if (request.Amount <= 0) return BadRequest(new { message = "Payment amount must be greater than zero." });
         if (request.Amount > outstanding) return BadRequest(new { message = $"Payment cannot exceed outstanding amount ₹{outstanding:0.00}." });
 
-        _db.Payments.Add(new Payment { BillId = id, Amount = request.Amount, Mode = request.Mode, Reference = request.Reference });
+        var paidAt = request.PaidAtUtc ?? DateTime.Now;
+        if (paidAt > DateTime.Now.AddMinutes(1))
+            return BadRequest(new { message = "Payment date cannot be in the future." });
+
+        _db.Payments.Add(new Payment { BillId = id, Amount = request.Amount, Mode = request.Mode, Reference = request.Reference, PaidAtUtc = paidAt });
         bill.PaidAmount += request.Amount;
         bill.Status = bill.PaidAmount >= bill.NetAmount ? "Paid" : "Partially Paid";
         await _db.SaveChangesAsync();
         await transaction.CommitAsync();
         return Ok(bill);
+    }
+
+    // Corrects the date on a payment that's already been recorded - e.g. a
+    // biller typed today's date by mistake when the money actually came in
+    // earlier. Available regardless of the bill's status (including fully
+    // Paid), unlike Pay above which only ever adds a new payment for a
+    // bill's remaining balance.
+    [HttpPut("{billId:int}/payments/{paymentId:int}/date")]
+    public async Task<IActionResult> UpdatePaymentDate(int billId, int paymentId, UpdatePaymentDateRequest request)
+    {
+        var payment = await _db.Payments.FirstOrDefaultAsync(x => x.Id == paymentId && x.BillId == billId);
+        if (payment == null) return NotFound();
+
+        if (request.PaidAtUtc > DateTime.Now.AddMinutes(1))
+            return BadRequest(new { message = "Payment date cannot be in the future." });
+
+        payment.PaidAtUtc = request.PaidAtUtc;
+        await _db.SaveChangesAsync();
+        return Ok(payment);
     }
 
     private async Task<Bill> BuildBill(BillCreateRequest request)

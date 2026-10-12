@@ -1,4 +1,5 @@
 using KrishavERP.Api;
+using KrishavERP.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,18 +20,64 @@ public class OtController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Get()
+    public async Task<IActionResult> Get(
+        [FromQuery] int page = 1,
+        [FromQuery] int? pageSize = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDirection = null,
+        [FromQuery] string? searchColumn = null,
+        [FromQuery] string? searchText = null)
     {
-        var bookings = await _db.OtBookings
-            .OrderByDescending(x => x.StartAtUtc)
-            .ToListAsync();
+        var query = _db.OtBookings.AsQueryable();
 
-        var doctorIds = bookings.Select(x => x.DoctorId).Distinct().ToList();
+        // DoctorName isn't an OtBooking column (it's resolved via a bulk
+        // dictionary lookup below, same as Bills does for patient/doctor
+        // names), so searching/sorting by it runs as a correlated subquery
+        // against Doctors instead of a plain .Where/.OrderBy on the entity -
+        // same trick Bills uses for patientName.
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "otRoom" => query.Where(x => x.OtRoom.Contains(searchText)),
+                "doctorName" => query.Where(x => _db.Doctors.Any(d => d.Id == x.DoctorId && d.Name.Contains(searchText))),
+                "procedureName" => query.Where(x => x.ProcedureName != null && x.ProcedureName.Contains(searchText)),
+                "status" => query.Where(x => x.Status.Contains(searchText)),
+                // No column specified - the OT grid uses a single plain
+                // search box, not a column picker, so match any of the
+                // fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    x.BookingNumber.Contains(searchText)
+                    || x.OtRoom.Contains(searchText)
+                    || _db.Doctors.Any(d => d.Id == x.DoctorId && d.Name.Contains(searchText))
+                    || (x.ProcedureName != null && x.ProcedureName.Contains(searchText))
+                    || x.Status.Contains(searchText))
+            };
+        }
+
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "otRoom" => descending ? query.OrderByDescending(x => x.OtRoom) : query.OrderBy(x => x.OtRoom),
+            "doctorName" => descending
+                ? query.OrderByDescending(x => _db.Doctors.Where(d => d.Id == x.DoctorId).Select(d => d.Name).FirstOrDefault())
+                : query.OrderBy(x => _db.Doctors.Where(d => d.Id == x.DoctorId).Select(d => d.Name).FirstOrDefault()),
+            "startAtUtc" => descending ? query.OrderByDescending(x => x.StartAtUtc) : query.OrderBy(x => x.StartAtUtc),
+            "endAtUtc" => descending ? query.OrderByDescending(x => x.EndAtUtc) : query.OrderBy(x => x.EndAtUtc),
+            "procedureName" => descending ? query.OrderByDescending(x => x.ProcedureName) : query.OrderBy(x => x.ProcedureName),
+            "doctorPayoutAmount" => descending ? query.OrderByDescending(x => x.DoctorPayoutAmount) : query.OrderBy(x => x.DoctorPayoutAmount),
+            "status" => descending ? query.OrderByDescending(x => x.Status) : query.OrderBy(x => x.Status),
+            _ => query.OrderByDescending(x => x.StartAtUtc)
+        };
+
+        var paged = await query.ToPagedResultAsync(page, pageSize ?? 10);
+
+        var doctorIds = paged.Rows.Select(x => x.DoctorId).Distinct().ToList();
         var doctors = await _db.Doctors
             .Where(x => doctorIds.Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, x => x.Name);
 
-        return Ok(bookings.Select(x => new
+        var shaped = paged.Rows.Select(x => new
         {
             x.Id,
             x.BookingNumber,
@@ -45,7 +92,9 @@ public class OtController : ControllerBase
             x.ProcedureName,
             x.DoctorPayoutAmount,
             x.Status
-        }));
+        }).ToList();
+
+        return Ok(new { rows = shaped, totalCount = paged.TotalCount });
     }
 
     [HttpPost]

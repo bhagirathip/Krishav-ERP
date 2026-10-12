@@ -4,32 +4,68 @@ import { api, assetUrl } from '../../api';
 import { can, role } from '../../auth';
 import Pagination from '../../components/Pagination.vue';
 import GridSearch from '../../components/GridSearch.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 import { ageText } from '../../utils/age';
 
 const tab = ref('Unpaid');
-const rows = ref([]);
 const todayDate = () => new Date().toISOString().slice(0, 10);
-const allDates = ref(false);
+// Defaults to every unpaid bill regardless of date, not just today's - a
+// biller opening this screen almost always wants to see everything still
+// owed, not a one-day slice of it. The date range stays available for
+// anyone who wants to narrow it down afterward.
+const allDates = ref(true);
 const dateFrom = ref(todayDate());
 const dateTo = ref(todayDate());
 const billTypeFilter = ref('All');
-const filteredByType = computed(() =>
-  billTypeFilter.value === 'All'
-    ? rows.value
-    : rows.value.filter(x => x.billType === billTypeFilter.value)
-);
-const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(filteredByType, 10);
 const pageSize = 10;
 
-// Grouped view ignores paging (a patient's bills shouldn't be split across
-// pages) but still respects the current search/sort/bill-type/date filters,
-// since it's built from the same `sortedRows` the flat table uses.
+// Grouped view needs every matching bill at once (a patient's bills
+// shouldn't be split across pages), so when it's active, fetchBillsPage
+// calls the same /bills endpoint without `page` and gets the full filtered
+// array back instead of a { rows, totalCount } page - `rows` below then
+// holds everything instead of just one page.
 const groupByPatient = ref(false);
+
+async function fetchBillsPage(params) {
+  const dateParams = allDates.value ? {} : { from: dateFrom.value, to: dateTo.value };
+  const baseParams = {
+    status: tab.value,
+    billType: billTypeFilter.value === 'All' ? undefined : billTypeFilter.value,
+    ...dateParams,
+    // No searchColumn - a plain search box matches bill number, patient
+    // name and status together server-side (see BillsController's default
+    // branch), rather than making the user pick a column first.
+    searchText: params.searchText
+  };
+
+  if (groupByPatient.value) {
+    const { data } = await api.get('/bills', { params: baseParams });
+    return { rows: data, totalCount: data.length };
+  }
+
+  const { data } = await api.get('/bills', {
+    params: {
+      ...baseParams,
+      page: params.page,
+      pageSize: params.pageSize,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchBillsPage, pageSize);
+
+watch(groupByPatient, () => {
+  page.value = 1;
+  reload();
+});
+
 const groupedRows = computed(() => {
   const patientMap = new Map();
 
-  for (const bill of sortedRows.value) {
+  for (const bill of rows.value) {
     const key = bill.patientId ?? `walkin:${bill.patientName || 'Unknown'}`;
     if (!patientMap.has(key)) {
       patientMap.set(key, {
@@ -95,6 +131,7 @@ const editing = ref(null);
 const selectedBill = ref(null);
 const errors = ref([]);
 const payment = ref({ amount: 0, mode: 'Cash', reference: '' });
+const paymentDatesModal = ref(null);
 
 const emptyBill = () => ({
   patientId: null,
@@ -159,17 +196,15 @@ function onPatientBlur() {
 }
 
 async function load() {
-  const dateParams = allDates.value ? {} : { from: dateFrom.value, to: dateTo.value };
-  const [billsRes, patientsRes, doctorsRes, categoriesRes, discountsRes, settingsRes] = await Promise.all([
-    api.get('/bills', { params: { status: tab.value, ...dateParams } }),
+  const [patientsRes, doctorsRes, categoriesRes, discountsRes, settingsRes] = await Promise.all([
     api.get('/patients'),
     api.get('/doctors'),
     api.get('/bill-types', { params: { billableOnly: true } }),
     api.get('/discounts'),
-    api.get('/settings')
+    api.get('/settings'),
+    reload()
   ]);
 
-  rows.value = billsRes.data;
   patients.value = patientsRes.data;
   doctors.value = doctorsRes.data;
   categories.value = categoriesRes.data;
@@ -416,18 +451,62 @@ function openPayment(bill) {
   payment.value = {
     amount: Number((bill.netAmount - bill.paidAmount).toFixed(2)),
     mode: 'Cash',
-    reference: ''
+    reference: '',
+    paymentDate: todayDate()
   };
   paymentModal.value = true;
 }
 
+// Payment date can be backdated (catching up on a payment actually received
+// earlier) but is otherwise just a date - combine it with the current
+// time-of-day so multiple same-day payments still sort sensibly by when
+// they were actually entered.
+function combineDateWithNowTime(dateStr) {
+  const now = new Date();
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds()).toISOString();
+}
+
 async function savePayment() {
   try {
-    await api.post(`/bills/${selectedBill.value.id}/pay`, payment.value);
+    await api.post(`/bills/${selectedBill.value.id}/pay`, {
+      amount: payment.value.amount,
+      mode: payment.value.mode,
+      reference: payment.value.reference,
+      paidAtUtc: combineDateWithNowTime(payment.value.paymentDate)
+    });
     paymentModal.value = false;
     await load();
   } catch (error) {
     alert(error.response?.data?.message || 'Unable to accept payment.');
+  }
+}
+
+// Corrects the date on a payment already recorded on this bill - available
+// for a fully Paid bill too (unlike Accept Payment above, which only adds a
+// new payment for whatever balance remains). A bill can have more than one
+// payment, so this edits one row at a time rather than the bill as a whole.
+function openPaymentDates(bill) {
+  paymentDatesModal.value = {
+    billId: bill.id,
+    billNumber: bill.billNumber,
+    payments: (bill.payments || [])
+      .filter(p => Number(p.amount) > 0)
+      .map(p => ({ id: p.id, amount: p.amount, mode: p.mode, paymentDate: new Date(p.paidAtUtc).toISOString().slice(0, 10) }))
+  };
+}
+
+// Stays open after a successful save (rather than closing) since a bill can
+// have more than one payment to fix in the same sitting - only reloads the
+// grid in the background so "Last Payment" etc. stay in sync.
+async function savePaymentDate(paymentRow) {
+  try {
+    await api.put(`/bills/${paymentDatesModal.value.billId}/payments/${paymentRow.id}/date`, {
+      paidAtUtc: combineDateWithNowTime(paymentRow.paymentDate)
+    });
+    await load();
+  } catch (error) {
+    alert(error.response?.data?.message || 'Unable to update this payment date.');
   }
 }
 
@@ -488,6 +567,19 @@ function paymentModesText(bill) {
   if (bill.status !== 'Paid' || !bill.payments?.length) return '-';
   const modes = [...new Set(bill.payments.map(p => p.mode))];
   return modes.join(', ');
+}
+
+// Grid column: just the most recent payment's date/time - if a bill was
+// settled across several payments, only the last one is shown here, not a
+// full history. Refund rows (negative amount) don't count as "a payment
+// coming in", so they're excluded when finding the latest one.
+function lastPaymentText(bill) {
+  const received = (bill.payments || []).filter(p => Number(p.amount) > 0);
+  if (!received.length) return '-';
+  const latest = received.reduce((a, b) => new Date(a.paidAtUtc) > new Date(b.paidAtUtc) ? a : b);
+  const d = new Date(latest.paidAtUtc);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // Builds just the printable content for one bill (header image + info block +
@@ -619,10 +711,10 @@ onMounted(load);
   </div>
 
   <div class="grid-filter-row">
-    <GridSearch v-model="search" placeholder="Search bill number, type, patient, amount, status..." />
+    <GridSearch v-model="searchText" placeholder="Search bill number, patient, status..." />
     <label>
       Bill Type
-      <select v-model="billTypeFilter" @change="page = 1">
+      <select v-model="billTypeFilter" @change="page = 1; reload()">
         <option value="All">All Bill Types</option>
         <option v-for="category in categories" :key="category.id" :value="category.name">{{ category.name }}</option>
       </select>
@@ -633,9 +725,9 @@ onMounted(load);
     <table class="table">
       <tr>
         <th class="sortable" @click="sortBy('billNumber')">Bill <span class="sort-indicator">{{ sortIndicator('billNumber') }}</span></th>
-        <th class="sortable" @click="sortBy('patientName')">Patient <span class="sort-indicator">{{ sortIndicator('patientName') }}</span></th>
+        <th>Patient</th>
         <th class="sortable" @click="sortBy('billType')">Type <span class="sort-indicator">{{ sortIndicator('billType') }}</span></th>
-        <th class="sortable" @click="sortBy('referrerName')">Referrer <span class="sort-indicator">{{ sortIndicator('referrerName') }}</span></th>
+        <th>Referrer</th>
         <th class="sortable" @click="sortBy('grossAmount')">Before Discount <span class="sort-indicator">{{ sortIndicator('grossAmount') }}</span></th>
         <th class="sortable" @click="sortBy('discountAmount')">Bulk Discount <span class="sort-indicator">{{ sortIndicator('discountAmount') }}</span></th>
         <th class="sortable" @click="sortBy('netAmount')">After Discount <span class="sort-indicator">{{ sortIndicator('netAmount') }}</span></th>
@@ -643,10 +735,11 @@ onMounted(load);
         <th>Outstanding</th>
         <th class="sortable" @click="sortBy('status')">Status <span class="sort-indicator">{{ sortIndicator('status') }}</span></th>
         <th>Mode</th>
+        <th>Last Payment</th>
         <th>Returned</th>
         <th></th>
       </tr>
-      <tr v-for="bill in pagedRows" :key="bill.id">
+      <tr v-for="bill in rows" :key="bill.id">
         <td>{{ bill.billNumber }}</td>
         <td>{{ bill.patientName || '-' }}</td>
         <td>{{ bill.billType }}</td>
@@ -658,17 +751,19 @@ onMounted(load);
         <td>₹{{ Number(bill.netAmount - bill.paidAmount).toFixed(2) }}</td>
         <td>{{ bill.status }}</td>
         <td>{{ paymentModesText(bill) }}</td>
+        <td>{{ lastPaymentText(bill) }}</td>
         <td>{{ Number(bill.refundedAmount || 0) > 0 ? '₹' + Number(bill.refundedAmount).toFixed(2) : '-' }}</td>
         <td class="actions">
           <button @click="printBill(bill)">Print</button>
           <button v-if="can('BILL', 'edit')" @click="editBill(bill)">Edit</button>
           <button v-if="bill.status !== 'Paid'" @click="openPayment(bill)">Accept Payment</button>
+          <button v-if="can('BILL', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment Date</button>
           <button v-if="can('BILL', 'delete')" class="danger-btn" @click="deleteBill(bill)">Delete</button>
         </td>
       </tr>
     </table>
 
-    <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page = $event" />
+    <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page = $event" />
   </template>
 
   <template v-else>
@@ -697,6 +792,7 @@ onMounted(load);
             <th>Outstanding</th>
             <th>Status</th>
             <th>Mode</th>
+            <th>Last Payment</th>
             <th>Returned</th>
             <th></th>
           </tr>
@@ -710,11 +806,13 @@ onMounted(load);
             <td>₹{{ Number(bill.netAmount - bill.paidAmount).toFixed(2) }}</td>
             <td>{{ bill.status }}</td>
             <td>{{ paymentModesText(bill) }}</td>
+            <td>{{ lastPaymentText(bill) }}</td>
             <td>{{ Number(bill.refundedAmount || 0) > 0 ? '₹' + Number(bill.refundedAmount).toFixed(2) : '-' }}</td>
             <td class="actions">
               <button @click="printBill(bill)">Print</button>
               <button v-if="can('BILL', 'edit')" @click="editBill(bill)">Edit</button>
               <button v-if="bill.status !== 'Paid'" @click="openPayment(bill)">Accept Payment</button>
+              <button v-if="can('BILL', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment Date</button>
               <button v-if="can('BILL', 'delete')" class="danger-btn" @click="deleteBill(bill)">Delete</button>
             </td>
           </tr>
@@ -905,11 +1003,32 @@ onMounted(load);
             <option>Cash</option><option>UPI</option><option>Card</option><option>Bank Transfer</option><option>Other</option>
           </select>
         </label>
+        <label>Payment Date<input v-model="payment.paymentDate" type="date" :max="todayDate()"></label>
         <label class="full">Reference<input v-model="payment.reference"></label>
       </div>
       <div class="modal-actions">
         <button @click="savePayment">Save Payment</button>
         <button class="secondary" @click="paymentModal = false">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="paymentDatesModal" class="modal-bg">
+    <div class="modal">
+      <button class="modal-close-x" @click="paymentDatesModal = null">×</button>
+      <h2>Edit Payment Date &middot; {{ paymentDatesModal.billNumber }}</h2>
+      <div class="muted">Corrects the date on a payment already recorded - doesn't change the amount or add a new payment.</div>
+      <table class="table" style="margin-top:12px">
+        <tr><th>Amount</th><th>Mode</th><th>Date</th><th></th></tr>
+        <tr v-for="p in paymentDatesModal.payments" :key="p.id">
+          <td>₹{{ Number(p.amount).toFixed(2) }}</td>
+          <td>{{ p.mode }}</td>
+          <td><input v-model="p.paymentDate" type="date" :max="todayDate()"></td>
+          <td><button @click="savePaymentDate(p)">Save</button></td>
+        </tr>
+      </table>
+      <div class="modal-actions">
+        <button class="secondary" @click="paymentDatesModal = null">Close</button>
       </div>
     </div>
   </div>

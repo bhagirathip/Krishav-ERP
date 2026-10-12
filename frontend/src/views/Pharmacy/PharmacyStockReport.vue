@@ -3,26 +3,38 @@ import { onMounted, ref } from 'vue';
 import { api } from '../../api';
 import GridSearch from '../../components/GridSearch.vue';
 import Pagination from '../../components/Pagination.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 
 const allDates = ref(true);
 const today = new Date().toISOString().slice(0, 10);
 const from = ref(today);
 const to = ref(today);
-const rows = ref([]);
 const totalClosingStockAmount = ref(0);
 const pageSize = 10;
-const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(rows, pageSize);
 
-async function load() {
-  const params = allDates.value ? {} : { from: from.value, to: to.value };
-  const { data } = await api.get('/pharmacy/sales/stock-report', { params });
-  rows.value = data.rows || [];
+// No searchColumn - this screen only ever had one searchable field (Product
+// Name), so the plain search box just matches that directly server-side
+// (see PharmacySalesController.StockReport).
+async function fetchStockReportPage(params) {
+  const dateParams = allDates.value ? {} : { from: from.value, to: to.value };
+  const { data } = await api.get('/pharmacy/sales/stock-report', {
+    params: {
+      ...dateParams,
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
   totalClosingStockAmount.value = data.totalClosingStockAmount || 0;
+  return { rows: data.rows || [], totalCount: data.totalCount || 0 };
 }
 
-function csvEscape(value) {
-  return `"${String(value ?? '').replaceAll('"', '""')}"`;
+const { page, pageCount, rows: pagedRows, totalCount, sortKey, sortDirection, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchStockReportPage, pageSize);
+
+async function load() {
+  await reload();
 }
 
 function downloadBlob(content, type, fileName) {
@@ -35,9 +47,23 @@ function downloadBlob(content, type, fileName) {
   URL.revokeObjectURL(url);
 }
 
-function exportExcel() {
+// Export needs every matching/sorted row, not just the current page, so it
+// calls the report endpoint directly without `page` - the backend then
+// returns the full filtered+sorted array instead of one page of it.
+async function exportExcel() {
+  const dateParams = allDates.value ? {} : { from: from.value, to: to.value };
+  const { data } = await api.get('/pharmacy/sales/stock-report', {
+    params: {
+      ...dateParams,
+      searchText: searchText.value,
+      sortBy: sortKey.value,
+      sortDirection: sortDirection.value
+    }
+  });
+  const exportRows = data.rows || [];
+
   const headerCells = ['Sl No', 'Product Name', 'MRP', 'Purchases', 'Sales', 'Closing Stock', 'Closing Stock Amount'];
-  const bodyRows = sortedRows.value.map((row, index) => `<tr>
+  const bodyRows = exportRows.map((row, index) => `<tr>
     <td>${index + 1}</td>
     <td>${row.productName}</td>
     <td>${Number(row.mrp).toFixed(2)}</td>
@@ -49,7 +75,7 @@ function exportExcel() {
   const html = `<html><head><meta charset="utf-8"></head><body><table border="1">
     <tr>${headerCells.map(h => `<th>${h}</th>`).join('')}</tr>
     ${bodyRows}
-    <tr><td colspan="6"><b>Total Closing Stock Amount</b></td><td><b>${totalClosingStockAmount.value.toFixed(2)}</b></td></tr>
+    <tr><td colspan="6"><b>Total Closing Stock Amount</b></td><td><b>${(data.totalClosingStockAmount || 0).toFixed(2)}</b></td></tr>
   </table></body></html>`;
   downloadBlob(html, 'application/vnd.ms-excel', `pharmacy-stock-report-${today}.xls`);
 }
@@ -73,7 +99,7 @@ onMounted(load);
     <div class="card"><div class="muted">Total Closing Stock Value</div><div class="metric">₹{{ Number(totalClosingStockAmount).toFixed(2) }}</div></div>
   </div>
 
-  <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search product name..." /></div>
+  <div class="grid-filter-row"><GridSearch v-model="searchText" placeholder="Search product name..." /></div>
   <div class="table-scroll">
     <table class="table report-table">
       <tr>
@@ -95,7 +121,7 @@ onMounted(load);
         <td><b>₹{{ Number(row.closingStockAmount).toFixed(2) }}</b></td>
       </tr>
     </table>
-    <div v-if="!rows.length" class="muted">No purchase data found.</div>
-    <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page = $event" />
+    <div v-if="!pagedRows.length" class="muted">No purchase data found.</div>
+    <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page = $event" />
   </div>
 </template>

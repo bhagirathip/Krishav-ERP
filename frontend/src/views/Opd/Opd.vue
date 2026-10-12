@@ -4,16 +4,39 @@ import { api, assetUrl } from '../../api';
 import { can } from '../../auth';
 import Pagination from '../../components/Pagination.vue';
 import GridSearch from '../../components/GridSearch.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 import { ageText } from '../../utils/age';
 
-const rows = ref([]);
 const pageSize = 10;
-const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(rows, pageSize);
+
 const todayDate = () => new Date().toISOString().slice(0, 10);
 const allDates = ref(false);
 const dateFrom = ref(todayDate());
 const dateTo = ref(todayDate());
+
+// All columns shown in the grid (visitNumber/visitType/visitDateUtc/
+// patientName/doctorName/convertedToIpd) come straight off the join query in
+// OpdController.Get, so every one of them stays sortable/searchable in SQL -
+// unlike Patients/Bills there's no post-fetch enrichment step to drop
+// anything for here. No searchColumn is sent - a plain search box matches
+// patient name, visit number, phone, patient code and doctor together
+// server-side (see OpdController's default branch).
+async function fetchOpdPage(params) {
+  const dateParams = allDates.value ? {} : { from: dateFrom.value, to: dateTo.value };
+  const { data } = await api.get('/opd', {
+    params: {
+      ...dateParams,
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchOpdPage, pageSize);
 const patients = ref([]);
 const doctors = ref([]);
 const beds = ref([]);
@@ -78,9 +101,7 @@ const ipdForm = ref({
 });
 
 async function load() {
-  const dateParams = allDates.value ? {} : { from: dateFrom.value, to: dateTo.value };
   const [
-    opdRes,
     patientsRes,
     doctorsRes,
     bedsRes,
@@ -88,16 +109,15 @@ async function load() {
     sourcesRes,
     opdTypesRes
   ] = await Promise.all([
-    api.get('/opd', { params: dateParams }),
     api.get('/patients'),
     api.get('/doctors'),
     api.get('/ipd/beds'),
     api.get('/referrals'),
     api.get('/patient-sources'),
-    api.get('/bill-types', { params: { opdOnly: true } })
+    api.get('/bill-types', { params: { opdOnly: true } }),
+    reload()
   ]);
 
-  rows.value = opdRes.data;
   patients.value = patientsRes.data;
   doctors.value = doctorsRes.data;
   beds.value = bedsRes.data;
@@ -382,6 +402,128 @@ async function printPrescription(row) {
 </html>`);
 }
 
+function vitalFieldHtml(label, unit) {
+  return `<div><div class="vf-label">${label}</div><div class="vf-line"></div><div class="vf-unit">${unit}</div></div>`;
+}
+
+// A true blank prescription PAD, not a filled-in record of this specific
+// visit - only the doctor's identity is printed (known in advance for this
+// visit's doctor slot), every patient/vitals/appointment field is left blank
+// for the doctor to write in by hand during consultation. Kept as a
+// separate button/function from printPrescription (which fills in the
+// patient's actual details) rather than replacing it.
+async function printNewBlankPrescription(row) {
+  const { data } = await api.get(`/opd/${row.id}/prescription`);
+
+  // No pre-made header image here (unlike every other print in this app) -
+  // the hospital logo and trust logo are two separate uploaded images
+  // placed left/right of an HTML-built name/address/contact block, so the
+  // text stays editable via Settings without needing a new banner image
+  // exported every time it changes.
+  const hospitalLogo = data.hospital.logo
+    ? `<img src="${assetUrl(data.hospital.logo)}">`
+    : '';
+  const trustLogo = data.hospital.trustLogo
+    ? `<img src="${assetUrl(data.hospital.trustLogo)}">`
+    : '';
+
+  const watermark = data.hospital.logo
+    ? `<img class="watermark" src="${assetUrl(data.hospital.logo)}">`
+    : '';
+
+  const vitals = [
+    vitalFieldHtml('BP', 'mmHg'),
+    vitalFieldHtml('Temp', '°F'),
+    vitalFieldHtml('Pulse', 'bpm'),
+    vitalFieldHtml('Weight', 'kg'),
+    vitalFieldHtml('Height', 'cm'),
+    vitalFieldHtml('SpO₂', '%')
+  ].join('');
+
+  printHtml(`<!doctype html>
+<html>
+<head>
+  <title></title>
+  <style>
+    @page { size: A4; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; width: 210mm; min-height: 297mm; display: flex; flex-direction: column; font-family: Arial, sans-serif; color: #000; position: relative; }
+    .rx-header { display: flex; align-items: center; gap: 10px; padding: 6mm 10mm 4mm; border-bottom: 3px solid #2e7d32; }
+    .rx-header .logo-box { flex: 0 0 32mm; height: 24mm; display: flex; align-items: center; justify-content: center; }
+    .rx-header .logo-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .rx-header .hospital-info { flex: 1; text-align: center; padding: 0 6px; }
+    .rx-header .hospital-name { font-size: 26px; font-weight: 800; color: #14387a; margin: 0; }
+    .rx-header .tagline { font-size: 12px; color: #2e7d32; font-weight: 700; margin: 2px 0 6px; letter-spacing: 0.5px; }
+    .rx-header .address-row { font-size: 11.5px; color: #333; margin-bottom: 2px; }
+    .rx-header .contact-row { font-size: 11.5px; color: #333; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; }
+    .content { flex: 1 0 auto; display: flex; flex-direction: column; padding: 6mm 12mm 10mm; position: relative; z-index: 1; }
+    .watermark { position: absolute; left: -20mm; bottom: -10mm; width: 90mm; opacity: 0.08; pointer-events: none; z-index: 0; }
+    .info-box { background: #eef3f9; border-radius: 10px; padding: 12px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; font-size: 14px; margin-bottom: 14px; }
+    .info-box .field { display: flex; align-items: baseline; gap: 6px; }
+    .info-box .field b { min-width: 120px; flex: 0 0 auto; }
+    .info-box .field .line { flex: 1; border-bottom: 1px solid #333; min-height: 14px; }
+    .info-box .field .filled { flex: 1; border-bottom: 1px solid #333; padding-bottom: 1px; }
+    .vitals-box { display: flex; align-items: stretch; border: 1px solid #ccc; border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
+    .vitals-badge { background: #2d6cdf; color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; padding: 0 16px; white-space: nowrap; }
+    .vitals-fields { flex: 1; display: grid; grid-template-columns: repeat(6, 1fr); gap: 0 10px; padding: 10px 14px; font-size: 12px; }
+    .vitals-fields .vf-label { font-weight: 700; margin-bottom: 20px; }
+    .vitals-fields .vf-line { border-bottom: 1px solid #333; height: 14px; }
+    .vitals-fields .vf-unit { text-align: center; color: #555; margin-top: 2px; }
+    .rx-symbol { font-family: Georgia, 'Times New Roman', serif; font-size: 44px; font-weight: 700; color: #1a4b96; margin: 2px 0 0; }
+    .blank-space { flex: 1 0 auto; }
+    .rx-footer { flex: 0 0 auto; display: flex; justify-content: flex-end; position: relative; z-index: 1; }
+    .signature-block { text-align: center; min-width: 220px; }
+    .signature-block .sig-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 4px; }
+    .signature-block .sig-caption { font-size: 12px; color: #555; }
+    .signature-block .sig-name { font-weight: 700; font-size: 15px; margin-top: 10px; }
+    .signature-block .sig-qual { font-size: 11.5px; color: #333; max-width: 260px; }
+  </style>
+</head>
+<body>
+  <div class="rx-header">
+    <div class="logo-box">${hospitalLogo}</div>
+    <div class="hospital-info">
+      <div class="hospital-name">${data.hospital.name || ''}</div>
+      <div class="tagline">A Multi-Speciality Hospital</div>
+      <div class="address-row">📍 ${data.hospital.address || ''}</div>
+      <div class="contact-row">
+        <span>📞 ${data.hospital.phone || ''}</span>
+        <span>✉ ${data.hospital.email || ''}</span>
+      </div>
+    </div>
+    <div class="logo-box">${trustLogo}</div>
+  </div>
+  <div class="content">
+    ${watermark}
+    <div class="info-box">
+      <div class="field"><b>Patient Name</b><span class="line"></span></div>
+      <div class="field"><b>Appt. Dt. &amp; Time</b><span class="line"></span></div>
+      <div class="field"><b>Patient ID</b><span class="line"></span></div>
+      <div class="field"><b>Doctor</b><span class="filled">${data.doctor?.name || ''}</span></div>
+      <div class="field"><b>Age / Gender</b><span class="line"></span></div>
+      <div class="field"><b>Specialization</b><span class="filled">${data.doctor?.specialisation || ''}</span></div>
+      <div class="field"><b>Phone</b><span class="line"></span></div>
+      <div></div>
+    </div>
+    <div class="vitals-box">
+      <div class="vitals-badge">VITALS</div>
+      <div class="vitals-fields">${vitals}</div>
+    </div>
+    <div class="rx-symbol">℞</div>
+    <div class="blank-space"></div>
+    <div class="rx-footer">
+      <div class="signature-block">
+        <div class="sig-line"><div class="sig-caption">Doctor's Signature</div></div>
+        <div class="sig-name">${data.doctor?.name || ''}</div>
+        <div class="sig-qual">${data.doctor?.specialisation || ''}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`);
+}
+
 onMounted(async () => {
   await load();
   const patientId = Number(new URLSearchParams(location.search).get('patientId'));
@@ -407,7 +549,9 @@ onMounted(async () => {
     <button v-if="!allDates" @click="load">Apply</button>
   </div>
 
-  <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all OPD fields..." /></div>
+  <div class="grid-filter-row">
+    <GridSearch v-model="searchText" placeholder="Search patient name, visit number, phone, patient code, doctor..." />
+  </div>
 
   <table class="table">
     <tr>
@@ -419,7 +563,7 @@ onMounted(async () => {
       <th class="sortable" @click="sortBy('convertedToIpd')">Status <span class="sort-indicator">{{ sortIndicator('convertedToIpd') }}</span></th>
       <th></th>
     </tr>
-    <tr v-for="row in pagedRows" :key="row.id">
+    <tr v-for="row in rows" :key="row.id">
       <td>{{ row.visitNumber }}</td>
       <td>{{ row.visitType }}</td>
       <td>{{ new Date(row.visitDateUtc).toLocaleString() }}</td>
@@ -431,13 +575,16 @@ onMounted(async () => {
       <td>{{ row.convertedToIpd ? 'Moved to IPD' : 'Active' }}</td>
       <td class="actions">
         <button @click="printPrescription(row)">Blank Prescription</button>
+        <!-- Temporarily hidden while the new design is finalized - printNewBlankPrescription(row) still works, just re-add this button to bring it back.
+        <button @click="printNewBlankPrescription(row)">New Blank Prescription</button>
+        -->
         <button v-if="!row.convertedToIpd" @click="convertToIpd(row)">OPD → IPD</button>
         <button v-if="can('OPD', 'edit')" @click="editVisit(row)">Edit</button>
         <button v-if="can('OPD', 'delete')" class="danger-btn" @click="deleteVisit(row)">Delete</button>
       </td>
     </tr>
   </table>
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page = $event" />
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page = $event" />
 
   <div v-if="show" class="modal-bg">
     <div class="modal modal-lg">

@@ -157,3 +157,54 @@ public class PharmacySaleItem
     public decimal DiscountAmount { get; set; }
     public decimal TotalAmount { get; set; }
 }
+
+// Stock issued to an internal hospital department (Lab/Dental/OT/Others),
+// not to a patient - no Bill/Payment is created for these, since nobody is
+// being charged at the point of dispensing. The hospital settles its running
+// tab with the pharmacy periodically instead (see HospitalSettlement below).
+public class HospitalIssue
+{
+    public int Id { get; set; }
+    public string IssueNumber { get; set; } = "";
+    public string Department { get; set; } = ""; // "Lab" | "Dental" | "OT" | "Others"
+    public DateTime IssueDateUtc { get; set; } = DateTime.Now;
+    public decimal TotalAmount { get; set; }
+
+    // Null until this issue is bundled into a settlement - settling always
+    // sweeps up every unsettled issue at once (see PharmacyHospitalController),
+    // so this is really just "settled or not", not a partial-settle marker.
+    public int? SettlementId { get; set; }
+    public List<HospitalIssueItem> Items { get; set; } = new();
+}
+
+public class HospitalIssueItem
+{
+    public int Id { get; set; }
+    public int HospitalIssueId { get; set; }
+    public int PurchaseItemId { get; set; }
+    public string ProductName { get; set; } = "";
+    public string BatchNo { get; set; } = "";
+    public string UnitType { get; set; } = "Strip";
+    public int Quantity { get; set; }
+    public int QuantityInTablets { get; set; }
+    public decimal Mrp { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+
+// One lump-sum settlement of every HospitalIssue that was still unsettled at
+// the moment "Settle Now" was clicked. The settlement itself is a single
+// payable total, but its linked issues keep their own IssueDateUtc, so the
+// settlement detail view can still show a date-wise breakdown of what's
+// being paid for.
+public class HospitalSettlement
+{
+    public int Id { get; set; }
+    public string SettlementNumber { get; set; } = "";
+    public DateTime SettlementDateUtc { get; set; } = DateTime.Now;
+    public decimal TotalAmount { get; set; }
+    public bool IsPaid { get; set; }
+    public DateTime? PaidAtUtc { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? ReferenceNumber { get; set; }
+}

@@ -29,9 +29,14 @@ public class OpdController : ControllerBase
 
     [HttpGet]
     public async Task<IActionResult> Get(
-        [FromQuery] string? q,
         [FromQuery] DateTime? from = null,
-        [FromQuery] DateTime? to = null)
+        [FromQuery] DateTime? to = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int? pageSize = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDirection = null,
+        [FromQuery] string? searchColumn = null,
+        [FromQuery] string? searchText = null)
     {
         var query =
             from visit in _db.OpdVisits
@@ -72,21 +77,48 @@ public class OpdController : ControllerBase
                 visit.ConvertedToIpd
             };
 
-        if (!string.IsNullOrWhiteSpace(q))
-        {
-            query = query.Where(x =>
-                x.PatientName.Contains(q) ||
-                x.Phone.Contains(q) ||
-                x.PatientCode.Contains(q) ||
-                (x.DoctorName != null && x.DoctorName.Contains(q)));
-        }
-
         if (from.HasValue) query = query.Where(x => x.VisitDateUtc >= from.Value.Date);
         if (to.HasValue) query = query.Where(x => x.VisitDateUtc < to.Value.Date.AddDays(1));
 
-        return Ok(await query
-            .OrderByDescending(x => x.VisitDateUtc)
-            .ToListAsync());
+        // The old `q` broad multi-field search was only ever consumed by this
+        // grid's own GridSearch box (no other caller passes `q`), so it's
+        // replaced outright by the per-column searchColumn/searchText used by
+        // the OPD grid, rather than kept around opt-in style like Patients'
+        // `q`/searchColumn split.
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "visitNumber" => query.Where(x => x.VisitNumber.Contains(searchText)),
+                "phone" => query.Where(x => x.Phone.Contains(searchText)),
+                "patientCode" => query.Where(x => x.PatientCode.Contains(searchText)),
+                "doctorName" => query.Where(x => x.DoctorName != null && x.DoctorName.Contains(searchText)),
+                // No column specified - the OPD grid uses a single plain
+                // search box, not a column picker, so match any of the
+                // fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    x.PatientName.Contains(searchText)
+                    || x.VisitNumber.Contains(searchText)
+                    || x.Phone.Contains(searchText)
+                    || x.PatientCode.Contains(searchText)
+                    || (x.DoctorName != null && x.DoctorName.Contains(searchText)))
+            };
+        }
+
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "visitNumber" => descending ? query.OrderByDescending(x => x.VisitNumber) : query.OrderBy(x => x.VisitNumber),
+            "visitType" => descending ? query.OrderByDescending(x => x.VisitType) : query.OrderBy(x => x.VisitType),
+            "patientName" => descending ? query.OrderByDescending(x => x.PatientName) : query.OrderBy(x => x.PatientName),
+            "doctorName" => descending ? query.OrderByDescending(x => x.DoctorName) : query.OrderBy(x => x.DoctorName),
+            "convertedToIpd" => descending ? query.OrderByDescending(x => x.ConvertedToIpd) : query.OrderBy(x => x.ConvertedToIpd),
+            "visitDateUtc" => descending ? query.OrderByDescending(x => x.VisitDateUtc) : query.OrderBy(x => x.VisitDateUtc),
+            _ => query.OrderByDescending(x => x.VisitDateUtc)
+        };
+
+        var paged = await query.ToPagedResultAsync(page, pageSize ?? 10);
+        return Ok(new { rows = paged.Rows, totalCount = paged.TotalCount });
     }
 
     [HttpPost]
@@ -313,7 +345,9 @@ public class OpdController : ControllerBase
                 name = Setting("Hospital Name"),
                 address = Setting("Hospital Address"),
                 phone = Setting("Hospital Phone"),
+                email = Setting("Hospital Email"),
                 logo = Setting("Hospital Logo"),
+                trustLogo = Setting("Trust Logo"),
                 opdHeader = Setting("OPD Header"),
                 header = Setting("Blank Prescription Header")
             }

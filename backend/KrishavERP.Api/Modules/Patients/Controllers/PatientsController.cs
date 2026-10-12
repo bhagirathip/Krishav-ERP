@@ -57,10 +57,21 @@ public class PatientsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Get([FromQuery] string? q)
+    public async Task<IActionResult> Get(
+        [FromQuery] string? q,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection)
     {
         var query = _db.Patients.Where(x => !x.IsDeleted);
 
+        // `q` is the legacy full-list search used by every patient-picker
+        // combo box elsewhere in the app (Bills, Pharmacy, IPD, OPD, Lab) -
+        // left untouched so those keep working. `searchColumn`/`searchText`
+        // is the new per-column search used only by the Patients grid.
         if (!string.IsNullOrWhiteSpace(q))
         {
             query = query.Where(x =>
@@ -69,9 +80,52 @@ public class PatientsController : ControllerBase
                 x.PatientCode.Contains(q));
         }
 
-        var patients = await query
-            .OrderByDescending(x => x.Id)
-            .ToListAsync();
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "phone" => query.Where(x => x.Phone.Contains(searchText)),
+                "patientCode" => query.Where(x => x.PatientCode.Contains(searchText)),
+                "address" => query.Where(x => x.Address != null && x.Address.Contains(searchText)),
+                "marketingSource" => query.Where(x => x.MarketingSource != null && x.MarketingSource.Contains(searchText)),
+                // No column specified - the Patients grid uses a single plain
+                // search box, not a column picker, so match any of the
+                // fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    x.Name.Contains(searchText)
+                    || x.Phone.Contains(searchText)
+                    || x.PatientCode.Contains(searchText)
+                    || (x.Address != null && x.Address.Contains(searchText))
+                    || (x.MarketingSource != null && x.MarketingSource.Contains(searchText)))
+            };
+        }
+
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "name" => descending ? query.OrderByDescending(x => x.Name) : query.OrderBy(x => x.Name),
+            "phone" => descending ? query.OrderByDescending(x => x.Phone) : query.OrderBy(x => x.Phone),
+            "patientCode" => descending ? query.OrderByDescending(x => x.PatientCode) : query.OrderBy(x => x.PatientCode),
+            "createdAtUtc" => descending ? query.OrderByDescending(x => x.CreatedAtUtc) : query.OrderBy(x => x.CreatedAtUtc),
+            _ => query.OrderByDescending(x => x.Id)
+        };
+
+        // Paging is opt-in via `page` - every other caller of this endpoint
+        // (patient-picker combos across the app) omits it and keeps getting
+        // the full array exactly as before. Only the Patients grid passes it.
+        List<Patient> patients;
+        int totalCount;
+        if (page.HasValue)
+        {
+            var paged = await query.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            patients = paged.Rows;
+            totalCount = paged.TotalCount;
+        }
+        else
+        {
+            patients = await query.ToListAsync();
+            totalCount = patients.Count;
+        }
 
         var result = new List<object>();
 
@@ -143,6 +197,11 @@ public class PatientsController : ControllerBase
                 Spo2 = latestOpd?.Spo2,
                 ChiefComplaint = latestOpd?.ChiefComplaint
             });
+        }
+
+        if (page.HasValue)
+        {
+            return Ok(new { rows = result, totalCount });
         }
 
         return Ok(result);

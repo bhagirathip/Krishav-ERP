@@ -3,6 +3,9 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using KrishavERP.Api.Modules.Billing;
+using KrishavERP.Api.Modules.Doctors;
+using KrishavERP.Api.Modules.Patients;
+using KrishavERP.Api.Services;
 
 namespace KrishavERP.Api.Modules.Reporting.Controllers;
 
@@ -74,7 +77,13 @@ public class ReportingController : ControllerBase
     public async Task<IActionResult> GetDoctorSummary(
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
-        [FromQuery] int? doctorId)
+        [FromQuery] int? doctorId,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText)
     {
         var start = (from ?? DateTime.Today).Date;
         var end = (to ?? DateTime.Today).Date.AddDays(1);
@@ -85,56 +94,141 @@ public class ReportingController : ControllerBase
         if (doctorId.HasValue)
             doctorsQuery = doctorsQuery.Where(x => x.Id == doctorId.Value);
 
-        var doctors = await doctorsQuery.OrderBy(x => x.Name).ToListAsync();
+        // doctorName is the only free-text column on this grid - patientCount/
+        // consultationCount/total are aggregates handled below, not something
+        // a plain Doctor-table WHERE can filter on. No column picker on the
+        // frontend anymore either - the Doctor-wise grid uses a single plain
+        // search box, so this default branch is the only one that ever runs.
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            doctorsQuery = searchColumn switch
+            {
+                _ => doctorsQuery.Where(x => x.Name.Contains(searchText))
+            };
+        }
+
+        // patientCount/consultationCount/total are correlated per-doctor
+        // aggregates, but they're bounded by the (small, non-growing) active
+        // doctor count rather than by the transaction volume behind them, so
+        // it's still cheap to let SQL sort on them via subqueries instead of
+        // falling back to an in-memory sort.
+        //
+        // Total is cash-basis: it sums actual Payments received in the
+        // period (joined to this doctor's bills), not bills issued in the
+        // period - a bill created last month but paid today counts today; a
+        // bill created today but not yet paid doesn't count until it is
+        // (see Unpaid in ShapeDoctorRows for that remainder).
+        var projected = doctorsQuery.Select(d => new DoctorAggregateRow
+        {
+            Doctor = d,
+            ConsultationCount = _db.OpdVisits.Count(v =>
+                !v.IsCancelled && v.DoctorId == d.Id && v.VisitDateUtc >= start && v.VisitDateUtc < end),
+            PatientCount = _db.OpdVisits
+                .Where(v => !v.IsCancelled && v.DoctorId == d.Id && v.VisitDateUtc >= start && v.VisitDateUtc < end)
+                .Select(v => v.PatientId)
+                .Distinct()
+                .Count(),
+            Total = (from p in _db.Payments
+                     join b in _db.Bills on p.BillId equals b.Id
+                     where b.Status != "Deleted" && b.DoctorId == d.Id && p.PaidAtUtc >= start && p.PaidAtUtc < end
+                     select (decimal?)p.Amount).Sum() ?? 0m
+        });
+
+        var descending = sortDirection == "desc";
+        projected = sortBy switch
+        {
+            "patientCount" => descending ? projected.OrderByDescending(x => x.PatientCount) : projected.OrderBy(x => x.PatientCount),
+            "consultationCount" => descending ? projected.OrderByDescending(x => x.ConsultationCount) : projected.OrderBy(x => x.ConsultationCount),
+            "total" => descending ? projected.OrderByDescending(x => x.Total) : projected.OrderBy(x => x.Total),
+            "doctorName" => descending ? projected.OrderByDescending(x => x.Doctor.Name) : projected.OrderBy(x => x.Doctor.Name),
+            _ => projected.OrderBy(x => x.Doctor.Name)
+        };
+
+        // Paging is opt-in via `page` - Reporting.vue is the only caller of
+        // this endpoint today, but the opt-in check is kept for parity with
+        // every other converted grid in case that ever changes.
+        if (page.HasValue)
+        {
+            var paged = await projected.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            var shaped = await ShapeDoctorRows(paged.Rows, categories, start, end);
+            return Ok(new { rows = shaped, totalCount = paged.TotalCount });
+        }
+
+        var all = await projected.ToListAsync();
+        return Ok(await ShapeDoctorRows(all, categories, start, end));
+    }
+
+    // Per-category income breakdown is only computed for the rows actually
+    // being returned (one page, or the full list on the legacy no-paging
+    // path) - never for every active doctor up front.
+    private async Task<List<object>> ShapeDoctorRows(
+        List<DoctorAggregateRow> source,
+        List<string> categories,
+        DateTime start,
+        DateTime end)
+    {
         var result = new List<object>();
 
-        foreach (var doctor in doctors)
+        foreach (var entry in source)
         {
-            var consultationQuery = _db.OpdVisits.Where(x =>
-                !x.IsCancelled &&
-                x.DoctorId == doctor.Id &&
-                x.VisitDateUtc >= start &&
-                x.VisitDateUtc < end);
-
-            var consultationCount = await consultationQuery.CountAsync();
-            var patientCount = await consultationQuery
-                .Select(x => x.PatientId)
-                .Distinct()
-                .CountAsync();
-
-            var bills = await _db.Bills
-                .Where(x =>
-                    x.Status != "Deleted" &&
-                    x.DoctorId == doctor.Id &&
-                    x.BillDate >= start &&
-                    x.BillDate < end)
-                .ToListAsync();
+            // Cash-basis per-category breakdown: actual payments received in
+            // the period, joined to this doctor's bills - mirrors Total above.
+            var payments = await (from p in _db.Payments
+                                   join b in _db.Bills on p.BillId equals b.Id
+                                   where b.Status != "Deleted" && b.DoctorId == entry.Doctor.Id
+                                         && p.PaidAtUtc >= start && p.PaidAtUtc < end
+                                   select new { p.Amount, b.BillType }).ToListAsync();
 
             var income = categories.ToDictionary(
                 category => category,
-                category => bills
+                category => payments
                     .Where(x => x.BillType.Equals(category, StringComparison.OrdinalIgnoreCase))
-                    .Sum(x => x.NetAmount));
+                    .Sum(x => x.Amount));
+
+            // Unpaid: the outstanding balance of bills actually issued in
+            // this period - a separate, bill-date-based figure from the
+            // payment-date-based Total/Income above. E.g. a ₹10,000 bill
+            // created today with ₹4,000 paid today contributes ₹4,000 to
+            // Total and ₹6,000 here, regardless of when (or whether) the
+            // remaining ₹6,000 eventually gets paid.
+            var unpaid = await _db.Bills
+                .Where(x => x.Status != "Deleted" && x.DoctorId == entry.Doctor.Id && x.BillDate >= start && x.BillDate < end)
+                .SumAsync(x => (decimal?)(x.NetAmount - x.PaidAmount)) ?? 0m;
 
             result.Add(new
             {
-                DoctorId = doctor.Id,
-                DoctorName = doctor.Name,
-                PatientCount = patientCount,
-                ConsultationCount = consultationCount,
+                DoctorId = entry.Doctor.Id,
+                DoctorName = entry.Doctor.Name,
+                PatientCount = entry.PatientCount,
+                ConsultationCount = entry.ConsultationCount,
                 Income = income,
-                Total = bills.Sum(x => x.NetAmount)
+                Total = entry.Total,
+                Unpaid = Math.Max(0, unpaid)
             });
         }
 
-        return Ok(result);
+        return result;
+    }
+
+    private sealed class DoctorAggregateRow
+    {
+        public Doctor Doctor { get; set; } = null!;
+        public int ConsultationCount { get; set; }
+        public int PatientCount { get; set; }
+        public decimal Total { get; set; }
     }
 
     [HttpGet("patient-summary")]
     public async Task<IActionResult> GetPatientSummary(
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
-        [FromQuery] int? patientId)
+        [FromQuery] int? patientId,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText)
     {
         var start = (from ?? DateTime.Today).Date;
         var end = (to ?? DateTime.Today).Date.AddDays(1);
@@ -145,40 +239,129 @@ public class ReportingController : ControllerBase
         if (patientId.HasValue)
             patientsQuery = patientsQuery.Where(x => x.Id == patientId.Value);
 
-        var patients = await patientsQuery.OrderBy(x => x.Name).ToListAsync();
+        // Only patients with at least one matching bill OR payment in range
+        // are shown, unless a specific patientId was requested (then it's
+        // always shown, even with zero activity). The payment half matters
+        // now that Total/Income are cash-basis below - a patient who's only
+        // paying off an older bill this period (no new bill issued today)
+        // still needs to show up, since they generated real cash this period.
+        if (!patientId.HasValue)
+        {
+            patientsQuery = patientsQuery.Where(p =>
+                _db.Bills.Any(b => b.Status != "Deleted" && b.PatientId == p.Id && b.BillDate >= start && b.BillDate < end)
+                || _db.Payments.Any(pay => pay.PaidAtUtc >= start && pay.PaidAtUtc < end
+                    && _db.Bills.Any(b => b.Id == pay.BillId && b.Status != "Deleted" && b.PatientId == p.Id)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            patientsQuery = searchColumn switch
+            {
+                "patientCode" => patientsQuery.Where(x => x.PatientCode.Contains(searchText)),
+                "phone" => patientsQuery.Where(x => x.Phone.Contains(searchText)),
+                // No column specified - the Patient-wise grid uses a single
+                // plain search box, not a column picker, so match any of the
+                // fields it used to offer in that dropdown.
+                _ => patientsQuery.Where(x =>
+                    x.Name.Contains(searchText)
+                    || x.PatientCode.Contains(searchText)
+                    || x.Phone.Contains(searchText))
+            };
+        }
+
+        // This grid can return thousands of rows over a wide custom date
+        // range, unlike doctor-summary above - Total still has to be sortable
+        // in SQL (via a correlated subquery) rather than loaded fully into
+        // memory just to order it. Total is cash-basis (see doctor-summary
+        // above for why): actual Payments received in the period, not bills
+        // issued in the period.
+        var projected = patientsQuery.Select(p => new PatientAggregateRow
+        {
+            Patient = p,
+            Total = (from pay in _db.Payments
+                     join b in _db.Bills on pay.BillId equals b.Id
+                     where b.Status != "Deleted" && b.PatientId == p.Id && pay.PaidAtUtc >= start && pay.PaidAtUtc < end
+                     select (decimal?)pay.Amount).Sum() ?? 0m
+        });
+
+        var descending = sortDirection == "desc";
+        projected = sortBy switch
+        {
+            "patientCode" => descending ? projected.OrderByDescending(x => x.Patient.PatientCode) : projected.OrderBy(x => x.Patient.PatientCode),
+            "phone" => descending ? projected.OrderByDescending(x => x.Patient.Phone) : projected.OrderBy(x => x.Patient.Phone),
+            "total" => descending ? projected.OrderByDescending(x => x.Total) : projected.OrderBy(x => x.Total),
+            "name" => descending ? projected.OrderByDescending(x => x.Patient.Name) : projected.OrderBy(x => x.Patient.Name),
+            _ => projected.OrderBy(x => x.Patient.Name)
+        };
+
+        // Paging is opt-in via `page` - Reporting.vue is the only caller of
+        // this endpoint today, but the opt-in check is kept for parity with
+        // every other converted grid in case that ever changes.
+        if (page.HasValue)
+        {
+            var paged = await projected.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            var shaped = await ShapePatientRows(paged.Rows, categories, start, end);
+            return Ok(new { rows = shaped, totalCount = paged.TotalCount });
+        }
+
+        var all = await projected.ToListAsync();
+        return Ok(await ShapePatientRows(all, categories, start, end));
+    }
+
+    // Per-category income breakdown is only computed for the rows actually
+    // being returned (one page, or the full list on the legacy no-paging
+    // path) - never for every matching patient up front.
+    private async Task<List<object>> ShapePatientRows(
+        List<PatientAggregateRow> source,
+        List<string> categories,
+        DateTime start,
+        DateTime end)
+    {
         var result = new List<object>();
 
-        foreach (var patient in patients)
+        foreach (var entry in source)
         {
-            var bills = await _db.Bills
-                .Where(x =>
-                    x.Status != "Deleted" &&
-                    x.PatientId == patient.Id &&
-                    x.BillDate >= start &&
-                    x.BillDate < end)
-                .ToListAsync();
-
-            if (bills.Count == 0 && !patientId.HasValue)
-                continue;
+            // Cash-basis per-category breakdown: actual payments received in
+            // the period, joined to this patient's bills - mirrors Total above.
+            var payments = await (from p in _db.Payments
+                                   join b in _db.Bills on p.BillId equals b.Id
+                                   where b.Status != "Deleted" && b.PatientId == entry.Patient.Id
+                                         && p.PaidAtUtc >= start && p.PaidAtUtc < end
+                                   select new { p.Amount, b.BillType }).ToListAsync();
 
             var income = categories.ToDictionary(
                 category => category,
-                category => bills
+                category => payments
                     .Where(x => x.BillType.Equals(category, StringComparison.OrdinalIgnoreCase))
-                    .Sum(x => x.NetAmount));
+                    .Sum(x => x.Amount));
+
+            // Unpaid: the outstanding balance of bills actually issued in
+            // this period - see ShapeDoctorRows for the full explanation.
+            var unpaid = await _db.Bills
+                .Where(x => x.Status != "Deleted" && x.PatientId == entry.Patient.Id && x.BillDate >= start && x.BillDate < end)
+                .SumAsync(x => (decimal?)(x.NetAmount - x.PaidAmount)) ?? 0m;
 
             result.Add(new
             {
-                PatientId = patient.Id,
-                patient.PatientCode,
-                patient.Name,
-                patient.Phone,
+                PatientId = entry.Patient.Id,
+                entry.Patient.PatientCode,
+                entry.Patient.Name,
+                entry.Patient.Phone,
                 Income = income,
-                Total = bills.Sum(x => x.NetAmount)
+                // Reuse the Total already computed in SQL above for sorting,
+                // instead of re-summing the re-fetched payments list.
+                Total = entry.Total,
+                Unpaid = Math.Max(0, unpaid)
             });
         }
 
-        return Ok(result);
+        return result;
+    }
+
+    private sealed class PatientAggregateRow
+    {
+        public Patient Patient { get; set; } = null!;
+        public decimal Total { get; set; }
     }
 
     [HttpGet("income-share")]
@@ -192,10 +375,14 @@ public class ReportingController : ControllerBase
         var end = (to ?? DateTime.Today).Date.AddDays(1);
         var categories = await GetActiveCategoryNames();
 
-        var query = _db.Bills.Where(x =>
-            x.Status != "Deleted" &&
-            x.BillDate >= start &&
-            x.BillDate < end);
+        // Cash-basis, consistent with Doctor-wise/Patient-wise reports above:
+        // income reflects actual payments received in the period, not bills
+        // issued in it.
+        var query =
+            from payment in _db.Payments
+            join bill in _db.Bills on payment.BillId equals bill.Id
+            where bill.Status != "Deleted" && payment.PaidAtUtc >= start && payment.PaidAtUtc < end
+            select new { payment.Amount, bill.BillType, bill.DoctorId, bill.PatientId };
 
         if (doctorId.HasValue)
             query = query.Where(x => x.DoctorId == doctorId.Value);
@@ -203,14 +390,14 @@ public class ReportingController : ControllerBase
         if (patientId.HasValue)
             query = query.Where(x => x.PatientId == patientId.Value);
 
-        var bills = await query.ToListAsync();
-        var total = bills.Sum(x => x.NetAmount);
+        var payments = await query.ToListAsync();
+        var total = payments.Sum(x => x.Amount);
 
         var result = categories.Select(category =>
         {
-            var amount = bills
+            var amount = payments
                 .Where(x => x.BillType.Equals(category, StringComparison.OrdinalIgnoreCase))
-                .Sum(x => x.NetAmount);
+                .Sum(x => x.Amount);
 
             return new
             {
@@ -301,6 +488,7 @@ public class ReportingController : ControllerBase
             await (from payment in _db.Payments
                    join bill in _db.Bills on payment.BillId equals bill.Id
                    where bill.Status != "Deleted" &&
+                         bill.BillType != "Pharmacy" &&
                          payment.PaidAtUtc >= start &&
                          payment.PaidAtUtc < end
                    select new { bill.Id, bill.BillType, bill.NetAmount, payment.Mode, payment.Amount })

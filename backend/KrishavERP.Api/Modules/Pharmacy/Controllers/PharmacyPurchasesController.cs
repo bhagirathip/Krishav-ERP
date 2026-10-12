@@ -1,4 +1,5 @@
 using KrishavERP.Api;
+using KrishavERP.Api.Services;
 using ExcelDataReader;
 using System.Data;
 using System.Globalization;
@@ -25,38 +26,80 @@ public class PharmacyPurchasesController : ControllerBase
         _environment = environment;
     }
 
+    // This endpoint is only consumed by the Pharmacy Purchase grid (no
+    // dropdown/autocomplete elsewhere reads it as a full-array source), so
+    // paging/search/sort are always applied rather than being opt-in.
     [HttpGet]
-    public async Task<IActionResult> Get()
+    public async Task<IActionResult> Get(
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection)
     {
-        var rows = await _db.PharmacyPurchaseInvoices
+        var query = _db.PharmacyPurchaseInvoices
             .Where(x => !x.IsDeleted)
             .Include(x => x.Distributor)
-            .OrderByDescending(x => x.InvoiceDate)
-            .ThenByDescending(x => x.Id)
-            .Select(x => new
-            {
-                x.Id,
-                x.InvoiceNumber,
-                x.InvoiceDate,
-                x.PaymentType,
-                x.DistributorId,
-                DistributorName = x.Distributor != null
-                    ? x.Distributor.Name
-                    : "",
-                x.DistributorDocumentName,
-                x.DistributorDocumentPath,
-                x.TotalQuantity,
-                x.TotalDiscount,
-                x.TotalTaxableAmount,
-                x.TotalCgst,
-                x.TotalSgst,
-                x.PreRoundTotalAmount,
-                x.RoundOffAmount,
-                x.TotalAmount
-            })
-            .ToListAsync();
+            .AsQueryable();
 
-        return Ok(rows);
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = searchColumn switch
+            {
+                "distributorName" => query.Where(x => x.Distributor != null && x.Distributor.Name.Contains(searchText)),
+                "paymentType" => query.Where(x => x.PaymentType.Contains(searchText)),
+                "invoiceNumber" => query.Where(x => x.InvoiceNumber.Contains(searchText)),
+                // No column specified - the Pharmacy Purchase grid uses a
+                // single plain search box, not a column picker, so match any
+                // of the fields a user would plausibly be searching by.
+                _ => query.Where(x =>
+                    x.InvoiceNumber.Contains(searchText)
+                    || x.PaymentType.Contains(searchText)
+                    || (x.Distributor != null && x.Distributor.Name.Contains(searchText)))
+            };
+        }
+
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "invoiceNumber" => descending ? query.OrderByDescending(x => x.InvoiceNumber) : query.OrderBy(x => x.InvoiceNumber),
+            "invoiceDate" => descending ? query.OrderByDescending(x => x.InvoiceDate) : query.OrderBy(x => x.InvoiceDate),
+            "distributorName" => descending ? query.OrderByDescending(x => x.Distributor!.Name) : query.OrderBy(x => x.Distributor!.Name),
+            "paymentType" => descending ? query.OrderByDescending(x => x.PaymentType) : query.OrderBy(x => x.PaymentType),
+            "totalQuantity" => descending ? query.OrderByDescending(x => x.TotalQuantity) : query.OrderBy(x => x.TotalQuantity),
+            "totalDiscount" => descending ? query.OrderByDescending(x => x.TotalDiscount) : query.OrderBy(x => x.TotalDiscount),
+            "totalTaxableAmount" => descending ? query.OrderByDescending(x => x.TotalTaxableAmount) : query.OrderBy(x => x.TotalTaxableAmount),
+            "totalCgst" => descending ? query.OrderByDescending(x => x.TotalCgst) : query.OrderBy(x => x.TotalCgst),
+            "totalSgst" => descending ? query.OrderByDescending(x => x.TotalSgst) : query.OrderBy(x => x.TotalSgst),
+            "totalAmount" => descending ? query.OrderByDescending(x => x.TotalAmount) : query.OrderBy(x => x.TotalAmount),
+            _ => query.OrderByDescending(x => x.InvoiceDate).ThenByDescending(x => x.Id)
+        };
+
+        var shaped = query.Select(x => new
+        {
+            x.Id,
+            x.InvoiceNumber,
+            x.InvoiceDate,
+            x.PaymentType,
+            x.DistributorId,
+            DistributorName = x.Distributor != null
+                ? x.Distributor.Name
+                : "",
+            x.DistributorDocumentName,
+            x.DistributorDocumentPath,
+            x.TotalQuantity,
+            x.TotalDiscount,
+            x.TotalTaxableAmount,
+            x.TotalCgst,
+            x.TotalSgst,
+            x.PreRoundTotalAmount,
+            x.RoundOffAmount,
+            x.TotalAmount
+        });
+
+        var paged = await shaped.ToPagedResultAsync(page ?? 1, pageSize ?? 10);
+        return Ok(new { rows = paged.Rows, totalCount = paged.TotalCount });
     }
 
     [HttpGet("{id:int}")]

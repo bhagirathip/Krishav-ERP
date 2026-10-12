@@ -1,17 +1,13 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, onMounted } from 'vue';
 import { api } from '../../api';
 import GridSearch from '../../components/GridSearch.vue';
 import Pagination from '../../components/Pagination.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 
 const referrers = ref([]);
 const categories = ref([]);
-const summary = ref({
-  rows: [],
-  categories: [],
-  canApprovePayout: false
-});
+const summary = ref({ canApprovePayout: false });
 
 const from = ref(
   new Date().toISOString().slice(0, 10)
@@ -21,57 +17,55 @@ const to = ref(
 );
 const selectedReferrerId = ref(null);
 const department = ref('All');
+const pageSize = 10;
 
-const flatRows = computed(() => {
-  const result = [];
-
-  for (const referrer of summary.value.rows || []) {
-    for (const patient of referrer.patients || []) {
-      result.push({
-        ...patient,
-        referrerId: referrer.referrerId,
-        referrerCode: referrer.referrerCode,
-        referrerName: referrer.name
-      });
+// The grid used to be fed by flattening summary.rows[].patients (nested
+// referrer -> patients) into one row per referrer+patient on the client,
+// then paging/sorting/searching that in the browser. That flattening now
+// happens server-side instead (same logic, just moved into the /summary
+// endpoint), so this just asks for a page of the already-flattened list.
+async function fetchPayoutsPage(params) {
+  const { data } = await api.get('/referrals/summary', {
+    params: {
+      from: from.value,
+      to: to.value,
+      referrerId: selectedReferrerId.value || undefined,
+      department: department.value,
+      page: params.page,
+      pageSize: params.pageSize,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection,
+      searchText: params.searchText
     }
-  }
+  });
 
-  return result;
-});
+  categories.value = data.categories || [];
+  summary.value = { canApprovePayout: data.canApprovePayout };
+
+  return { rows: data.rows, totalCount: data.totalCount };
+}
 
 const {
-  search,
   page,
   pageCount,
-  pagedRows,
-  sortedRows,
+  rows,
+  totalCount,
   sortBy,
-  sortIndicator
-} = useGrid(flatRows, 10);
+  sortIndicator,
+  searchText,
+  reload
+} = useServerGrid(fetchPayoutsPage, pageSize);
 
 const payout = ref(null);
 
 async function load() {
-  const [refsRes, summaryRes] =
-    await Promise.all([
-      api.get('/referrals'),
-      api.get('/referrals/summary', {
-        params: {
-          from: from.value,
-          to: to.value,
-          referrerId:
-            selectedReferrerId.value ||
-            undefined,
-          department:
-            department.value
-        }
-      })
-    ]);
-
+  const refsRes = await api.get('/referrals');
   referrers.value = refsRes.data;
-  summary.value = summaryRes.data;
-  categories.value =
-    summaryRes.data.categories || [];
+
+  // A new date range/referrer/department filter can put the previous page
+  // out of range - reset back to page 1 before re-fetching.
+  page.value = 1;
+  await reload();
 }
 
 function money(value) {
@@ -174,8 +168,8 @@ onMounted(load);
 
   <div class="grid-filter-row">
     <GridSearch
-      v-model="search"
-      placeholder="Search referrer, patient, source, phone..."
+      v-model="searchText"
+      placeholder="Search referrer, patient, source, phone, patient code..."
     />
   </div>
 
@@ -197,7 +191,13 @@ onMounted(load);
         {{ sortIndicator('name') }}
       </th>
 
-      <th>Source</th>
+      <th
+        class="sortable"
+        @click="sortBy('marketingSource')"
+      >
+        Source
+        {{ sortIndicator('marketingSource') }}
+      </th>
 
       <th
         v-for="category in categories"
@@ -206,16 +206,46 @@ onMounted(load);
         {{ category }}
       </th>
 
-      <th>Total Income</th>
-      <th>Paid / Approved</th>
-      <th>Payment Date</th>
-      <th>Mode</th>
-      <th>Reference</th>
+      <th
+        class="sortable"
+        @click="sortBy('totalIncome')"
+      >
+        Total Income
+        {{ sortIndicator('totalIncome') }}
+      </th>
+      <th
+        class="sortable"
+        @click="sortBy('approvedPayout')"
+      >
+        Paid / Approved
+        {{ sortIndicator('approvedPayout') }}
+      </th>
+      <th
+        class="sortable"
+        @click="sortBy('paymentDate')"
+      >
+        Payment Date
+        {{ sortIndicator('paymentDate') }}
+      </th>
+      <th
+        class="sortable"
+        @click="sortBy('paymentMode')"
+      >
+        Mode
+        {{ sortIndicator('paymentMode') }}
+      </th>
+      <th
+        class="sortable"
+        @click="sortBy('referenceNumber')"
+      >
+        Reference
+        {{ sortIndicator('referenceNumber') }}
+      </th>
       <th></th>
     </tr>
 
     <tr
-      v-for="row in pagedRows"
+      v-for="row in rows"
       :key="
         row.referrerId +
         '-' +
@@ -296,8 +326,8 @@ onMounted(load);
   <Pagination
     :page="page"
     :page-count="pageCount"
-    :total="sortedRows.length"
-    :page-size="10"
+    :total="totalCount"
+    :page-size="pageSize"
     @update:page="page = $event"
   />
 

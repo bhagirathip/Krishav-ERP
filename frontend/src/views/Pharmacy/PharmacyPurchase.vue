@@ -4,11 +4,10 @@ import { api } from '../../api';
 import { can } from '../../auth';
 import Pagination from '../../components/Pagination.vue';
 import GridSearch from '../../components/GridSearch.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 import PurchaseInvoiceModal from './components/PurchaseInvoiceModal.vue';
 import PurchaseTypeMasterModal from './components/PurchaseTypeMasterModal.vue';
 
-const invoices = ref([]);
 const distributors = ref([]);
 const medicineTypes = ref([]);
 const showInvoice = ref(false);
@@ -16,12 +15,32 @@ const showTypeMaster = ref(false);
 const editingInvoice = ref(null);
 const pageSize = 10;
 
-const { search, page, pageCount, pagedRows: pagedInvoices, sortedRows, sortBy, sortIndicator } = useGrid(invoices, pageSize);
+// No searchColumn - a plain search box matches invoice number, distributor
+// and payment type together server-side (see PharmacyPurchasesController's
+// default branch), rather than making the user pick a column first.
+async function fetchPurchasesPage(params) {
+  const { data } = await api.get('/pharmacy/purchases', {
+    params: {
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows: pagedInvoices, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchPurchasesPage, pageSize);
 
 async function load() {
-  invoices.value = (await api.get('/pharmacy/purchases')).data;
-  distributors.value = (await api.get('/pharmacy/distributors')).data;
-  medicineTypes.value = (await api.get('/pharmacy/medicine-types')).data;
+  const [distributorsRes, medicineTypesRes] = await Promise.all([
+    api.get('/pharmacy/distributors'),
+    api.get('/pharmacy/medicine-types'),
+    reload()
+  ]);
+  distributors.value = distributorsRes.data;
+  medicineTypes.value = medicineTypesRes.data;
 }
 
 function addInvoice() {
@@ -96,7 +115,7 @@ onMounted(load);
     <button v-if="can('PHARMACY_PURCHASE', 'add')" @click="addInvoice">+ Add Purchase Invoice</button>
     <button class="secondary" @click="newType">Medicine Type Master</button>
   </div>
-  <div class="grid-filter-row"><GridSearch v-model="search" placeholder="Search all purchase invoice fields..." /></div>
+  <div class="grid-filter-row"><GridSearch v-model="searchText" placeholder="Search invoice no, distributor, cash/credit..." /></div>
 
   <table class="table">
     <tr>
@@ -130,7 +149,7 @@ onMounted(load);
     </tr>
   </table>
 
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="pageSize" @update:page="page = $event" />
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page = $event" />
 
   <PurchaseInvoiceModal
     v-if="showInvoice"

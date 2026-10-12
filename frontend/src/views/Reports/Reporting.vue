@@ -4,7 +4,7 @@ import { api } from '../../api';
 import { can } from '../../auth';
 import Pagination from '../../components/Pagination.vue';
 import GridSearch from '../../components/GridSearch.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
 
 const today = new Date().toISOString().slice(0, 10);
 const from = ref(today);
@@ -19,12 +19,74 @@ const monthlyRevenue = ref({ year: selectedYear.value, rows: [] });
 const doctors = ref([]);
 const patients = ref([]);
 const categories = ref([]);
-const doctorRows = ref([]);
-const patientRows = ref([]);
 const incomeShare = ref({ total: 0, items: [] });
 const pageSize = 10;
-const { search: doctorSearch, page: doctorPage, pageCount: doctorPageCount, pagedRows: pagedDoctorRows, sortedRows: sortedDoctorRows, sortBy: sortDoctor, sortIndicator: doctorSortIndicator } = useGrid(doctorRows, pageSize);
-const { search: patientSearch, page: patientPage, pageCount: patientPageCount, pagedRows: pagedPatientRows, sortedRows: sortedPatientRows, sortBy: sortPatient, sortIndicator: patientSortIndicator } = useGrid(patientRows, pageSize);
+
+// patientCount/consultationCount/income-per-category are all derived
+// aggregates computed on the backend for whichever rows are returned - the
+// dynamic per-category income columns can't be mapped onto a fixed sortBy
+// case (the category list itself is runtime-configurable), so those two
+// grids only expose sort on their fixed columns below.
+async function fetchDoctorSummaryPage(params) {
+  const { data } = await api.get('/reporting/doctor-summary', {
+    params: {
+      from: from.value,
+      to: to.value,
+      doctorId: selectedDoctorId.value || undefined,
+      page: params.page,
+      pageSize: params.pageSize,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection,
+      searchText: params.searchText
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+async function fetchPatientSummaryPage(params) {
+  const { data } = await api.get('/reporting/patient-summary', {
+    params: {
+      from: from.value,
+      to: to.value,
+      patientId: selectedPatientId.value || undefined,
+      page: params.page,
+      pageSize: params.pageSize,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection,
+      searchText: params.searchText
+    }
+  });
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const {
+  page: doctorPage,
+  pageCount: doctorPageCount,
+  rows: doctorRows,
+  totalCount: doctorTotalCount,
+  sortBy: sortDoctor,
+  sortIndicator: doctorSortIndicator,
+  searchText: doctorSearchText,
+  reload: reloadDoctorSummary
+} = useServerGrid(fetchDoctorSummaryPage, pageSize);
+
+const {
+  page: patientPage,
+  pageCount: patientPageCount,
+  rows: patientRows,
+  totalCount: patientTotalCount,
+  sortKey: patientSortKey,
+  sortDirection: patientSortDirection,
+  sortBy: sortPatient,
+  sortIndicator: patientSortIndicator,
+  searchText: patientSearchText,
+  reload: reloadPatientSummary
+} = useServerGrid(fetchPatientSummaryPage, pageSize);
+// Patient-wise report used to be fetched in full and re-sorted by total
+// descending on the client - set that as this grid's initial server sort so
+// the default view looks the same as before.
+patientSortKey.value = 'total';
+patientSortDirection.value = 'desc';
 
 const paymentModeShare = ref({ total: 0, items: [] });
 const paymentModeByBillType = ref({ rows: [], totalCash: 0, totalOnline: 0, grandTotal: 0 });
@@ -56,19 +118,13 @@ async function loadReports() {
     to: to.value
   };
 
-  const [doctorRes, patientRes, shareRes, paymentModeRes, paymentModeByBillTypeRes, executiveRes, monthlyRes] = await Promise.all([
-    api.get('/reporting/doctor-summary', {
-      params: {
-        ...common,
-        doctorId: selectedDoctorId.value || undefined
-      }
-    }),
-    api.get('/reporting/patient-summary', {
-      params: {
-        ...common,
-        patientId: selectedPatientId.value || undefined
-      }
-    }),
+  // A new date range/doctor/patient filter can easily put the previous page
+  // out of range (or just show stale rows from the old filter briefly) -
+  // reset both grids back to page 1 before re-fetching.
+  doctorPage.value = 1;
+  patientPage.value = 1;
+
+  const [shareRes, paymentModeRes, paymentModeByBillTypeRes, executiveRes, monthlyRes] = await Promise.all([
     api.get('/reporting/income-share', {
       params: {
         ...common,
@@ -85,11 +141,14 @@ async function loadReports() {
     }),
     api.get('/reporting/payment-mode-by-bill-type', { params: common }),
     api.get('/reporting/executive', { params: common }),
-    api.get('/reporting/monthly-revenue', { params: { year: selectedYear.value } })
+    api.get('/reporting/monthly-revenue', { params: { year: selectedYear.value } }),
+    // doctor-summary/patient-summary are fetched via the two useServerGrid
+    // instances above (doctorRows/patientRows), not here - they carry their
+    // own page/sort/search state and reload independently of this call.
+    reloadDoctorSummary(),
+    reloadPatientSummary()
   ]);
 
-  doctorRows.value = doctorRes.data;
-  patientRows.value = patientRes.data.sort((a, b) => Number(b.total) - Number(a.total));
   incomeShare.value = shareRes.data;
   paymentModeShare.value = paymentModeRes.data;
   paymentModeByBillType.value = paymentModeByBillTypeRes.data;
@@ -102,6 +161,11 @@ async function load() {
   await loadReports();
 }
 
+// doctorRows/patientRows only ever hold the current page of results now
+// (server-paged, not the full filtered dataset), so the bar chart below -
+// which already only ever rendered that same page's rows before this
+// conversion - is scaled relative to the visible page rather than the whole
+// matching dataset.
 function maxDoctorIncome() {
   return Math.max(1, ...doctorRows.value.map(x => Number(x.total || 0)));
 }
@@ -151,6 +215,15 @@ function formatDate(date) {
   const d = new Date(date);
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 10);
+}
+
+// `from`/`to` are stored as plain "yyyy-mm-dd" strings (straight from the
+// date inputs) - this just re-formats one for display as dd-mm-yyyy,
+// matching the date format shown everywhere else in this app.
+function displayDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}-${m}-${y}`;
 }
 
 function applyPreset() {
@@ -260,6 +333,30 @@ onMounted(load);
     </label>
     <button @click="loadReports">Apply</button>
   </div>
+
+  <h2>Cash vs Online by Bill Type</h2>
+  <div class="muted">Showing {{ displayDate(from) }} to {{ displayDate(to) }}</div>
+  <div v-if="!paymentModeByBillType.rows?.length" class="muted">No payments received for this period.</div>
+  <table v-else class="table">
+    <tr>
+      <th>Bill Type</th>
+      <th>Cash</th>
+      <th>Online</th>
+      <th>Total</th>
+    </tr>
+    <tr v-for="row in paymentModeByBillType.rows" :key="row.billType">
+      <td>{{ row.billType }}</td>
+      <td>₹{{ money(row.cash) }}</td>
+      <td>₹{{ money(row.online) }}</td>
+      <td><b>₹{{ money(row.total) }}</b></td>
+    </tr>
+    <tr>
+      <td><b>Total</b></td>
+      <td><b>₹{{ money(paymentModeByBillType.totalCash) }}</b></td>
+      <td><b>₹{{ money(paymentModeByBillType.totalOnline) }}</b></td>
+      <td><b>₹{{ money(paymentModeByBillType.grandTotal) }}</b></td>
+    </tr>
+  </table>
 
   <h2>Executive Dashboard</h2>
   <div class="executive-card-grid">
@@ -424,33 +521,10 @@ onMounted(load);
     </section>
   </div>
 
-  <h2>Cash vs Online by Bill Type</h2>
-  <div v-if="!paymentModeByBillType.rows?.length" class="muted">No payments received for this period.</div>
-  <table v-else class="table">
-    <tr>
-      <th>Bill Type</th>
-      <th>Cash</th>
-      <th>Online</th>
-      <th>Total</th>
-    </tr>
-    <tr v-for="row in paymentModeByBillType.rows" :key="row.billType">
-      <td>{{ row.billType }}</td>
-      <td>₹{{ money(row.cash) }}</td>
-      <td>₹{{ money(row.online) }}</td>
-      <td><b>₹{{ money(row.total) }}</b></td>
-    </tr>
-    <tr>
-      <td><b>Total</b></td>
-      <td><b>₹{{ money(paymentModeByBillType.totalCash) }}</b></td>
-      <td><b>₹{{ money(paymentModeByBillType.totalOnline) }}</b></td>
-      <td><b>₹{{ money(paymentModeByBillType.grandTotal) }}</b></td>
-    </tr>
-  </table>
-
   <h2>Doctor-wise Report</h2>
   <div class="chart-card card">
     <div v-if="!doctorRows.length" class="muted">No doctor income data for this period.</div>
-    <div v-for="row in pagedDoctorRows" :key="row.doctorId" class="bar-row">
+    <div v-for="row in doctorRows" :key="row.doctorId" class="bar-row">
       <div class="bar-label">{{ row.doctorName }}</div>
       <div class="bar-track">
         <div class="bar-fill" :style="{ width: (row.total / maxDoctorIncome() * 100) + '%' }"></div>
@@ -460,7 +534,7 @@ onMounted(load);
   </div>
 
   <div class="grid-filter-row">
-    <GridSearch v-model="doctorSearch" placeholder="Search all doctor report fields..." />
+    <GridSearch v-model="doctorSearchText" placeholder="Search doctor..." />
   </div>
   <div class="table-scroll">
     <table class="table report-table">
@@ -468,24 +542,26 @@ onMounted(load);
         <th class="sortable" @click="sortDoctor('doctorName')">Doctor <span class="sort-indicator">{{ doctorSortIndicator('doctorName') }}</span></th>
         <th class="sortable" @click="sortDoctor('patientCount')">Unique Patients <span class="sort-indicator">{{ doctorSortIndicator('patientCount') }}</span></th>
         <th class="sortable" @click="sortDoctor('consultationCount')">Consultations <span class="sort-indicator">{{ doctorSortIndicator('consultationCount') }}</span></th>
-        <th v-for="category in categories" :key="category.id" class="sortable" @click="sortDoctor('income.' + category.name)">{{ category.name }} <span class="sort-indicator">{{ doctorSortIndicator('income.' + category.name) }}</span></th>
-        <th class="sortable" @click="sortDoctor('total')">Total <span class="sort-indicator">{{ doctorSortIndicator('total') }}</span></th>
+        <th v-for="category in categories" :key="category.id">{{ category.name }}</th>
+        <th class="sortable" @click="sortDoctor('total')">Collected <span class="sort-indicator">{{ doctorSortIndicator('total') }}</span></th>
+        <th>Unpaid</th>
       </tr>
-      <tr v-for="row in pagedDoctorRows" :key="row.doctorId">
+      <tr v-for="row in doctorRows" :key="row.doctorId">
         <td>{{ row.doctorName }}</td>
         <td>{{ row.patientCount }}</td>
         <td>{{ row.consultationCount }}</td>
         <td v-for="category in categories" :key="category.id">₹{{ categoryIncome(row, category).toFixed(2) }}</td>
         <td><b>₹{{ Number(row.total).toFixed(2) }}</b></td>
+        <td>₹{{ Number(row.unpaid || 0).toFixed(2) }}</td>
       </tr>
     </table>
-    <Pagination :page="doctorPage" :page-count="doctorPageCount" :total="sortedDoctorRows.length" :page-size="pageSize" @update:page="doctorPage = $event" />
+    <Pagination :page="doctorPage" :page-count="doctorPageCount" :total="doctorTotalCount" :page-size="pageSize" @update:page="doctorPage = $event" />
   </div>
 
   <h2 class="report-section-heading">Patient-wise Report</h2>
   <div class="chart-card card">
     <div v-if="!patientRows.length" class="muted">No patient income data for this period.</div>
-    <div v-for="row in patientRows.slice(0, 15)" :key="row.patientId" class="bar-row">
+    <div v-for="row in patientRows" :key="row.patientId" class="bar-row">
       <div class="bar-label">{{ row.name }}</div>
       <div class="bar-track">
         <div class="bar-fill" :style="{ width: (row.total / maxPatientIncome() * 100) + '%' }"></div>
@@ -495,7 +571,7 @@ onMounted(load);
   </div>
 
   <div class="grid-filter-row">
-    <GridSearch v-model="patientSearch" placeholder="Search all patient report fields..." />
+    <GridSearch v-model="patientSearchText" placeholder="Search patient, patient code, phone..." />
   </div>
   <div class="table-scroll">
     <table class="table report-table">
@@ -503,18 +579,20 @@ onMounted(load);
         <th class="sortable" @click="sortPatient('name')">Patient <span class="sort-indicator">{{ patientSortIndicator('name') }}</span></th>
         <th class="sortable" @click="sortPatient('patientCode')">ID <span class="sort-indicator">{{ patientSortIndicator('patientCode') }}</span></th>
         <th class="sortable" @click="sortPatient('phone')">Phone <span class="sort-indicator">{{ patientSortIndicator('phone') }}</span></th>
-        <th v-for="category in categories" :key="category.id" class="sortable" @click="sortPatient('income.' + category.name)">{{ category.name }} <span class="sort-indicator">{{ patientSortIndicator('income.' + category.name) }}</span></th>
-        <th class="sortable" @click="sortPatient('total')">Total <span class="sort-indicator">{{ patientSortIndicator('total') }}</span></th>
+        <th v-for="category in categories" :key="category.id">{{ category.name }}</th>
+        <th class="sortable" @click="sortPatient('total')">Collected <span class="sort-indicator">{{ patientSortIndicator('total') }}</span></th>
+        <th>Unpaid</th>
       </tr>
-      <tr v-for="row in pagedPatientRows" :key="row.patientId">
+      <tr v-for="row in patientRows" :key="row.patientId">
         <td>{{ row.name }}</td>
         <td>{{ row.patientCode }}</td>
         <td>{{ row.phone }}</td>
         <td v-for="category in categories" :key="category.id">₹{{ categoryIncome(row, category).toFixed(2) }}</td>
         <td><b>₹{{ Number(row.total).toFixed(2) }}</b></td>
+        <td>₹{{ Number(row.unpaid || 0).toFixed(2) }}</td>
       </tr>
     </table>
-    <Pagination :page="patientPage" :page-count="patientPageCount" :total="sortedPatientRows.length" :page-size="pageSize" @update:page="patientPage = $event" />
+    <Pagination :page="patientPage" :page-count="patientPageCount" :total="patientTotalCount" :page-size="pageSize" @update:page="patientPage = $event" />
   </div>
 
   <div v-if="categoryModal" class="modal-bg">

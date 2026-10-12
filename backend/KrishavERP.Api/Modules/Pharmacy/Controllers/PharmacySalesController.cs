@@ -27,7 +27,7 @@ public class PharmacySalesController : ControllerBase
     }
 
     [HttpGet("search")]
-    public async Task<IActionResult> Search([FromQuery] string? q)
+    public async Task<IActionResult> Search([FromQuery] string? q, [FromQuery] int? page, [FromQuery] int? pageSize)
     {
         var query = _db.PharmacyPurchaseItems
             .Include(x => x.MedicineType)
@@ -51,31 +51,47 @@ public class PharmacySalesController : ControllerBase
                 (x.PurchaseInvoice != null && x.PurchaseInvoice.InvoiceNumber.Contains(text)));
         }
 
-        // No row cap here - the frontend already paginates this list
-        // client-side (useGrid), so capping it server-side just silently
-        // hid inventory past the 200th batch instead of paging through it.
-        var raw = await query
+        var ordered = query
             .OrderBy(x => x.ProductName)
             .ThenBy(x => x.ExpiryDate)
-            .Select(x => new
+            .Select(x => new StockSearchRow
             {
-                x.Id,
-                x.Manufacturer,
-                x.Hsn,
-                x.ProductName,
-                x.Packing,
-                x.BatchNo,
-                x.ExpiryDate,
-                x.Mrp,
-                x.TabletsPerStrip,
-                x.RemainingTablets,
+                Id = x.Id,
+                Manufacturer = x.Manufacturer,
+                Hsn = x.Hsn,
+                ProductName = x.ProductName,
+                Packing = x.Packing,
+                BatchNo = x.BatchNo,
+                ExpiryDate = x.ExpiryDate,
+                Mrp = x.Mrp,
+                TabletsPerStrip = x.TabletsPerStrip,
+                RemainingTablets = x.RemainingTablets,
                 MedicineType = x.MedicineType != null ? x.MedicineType.Name : "Tablet",
                 InvoiceNumber = x.PurchaseInvoice != null ? x.PurchaseInvoice.InvoiceNumber : "",
                 DistributorName = x.PurchaseInvoice != null && x.PurchaseInvoice.Distributor != null
                     ? x.PurchaseInvoice.Distributor.Name
                     : ""
-            })
-            .ToListAsync();
+            });
+
+        // Paging is opt-in via `page` - Pharmacy Sales' own cart-building
+        // screen still calls this without `page` and keeps getting the full
+        // unpaged array exactly as before (it paginates client-side, and
+        // deliberately isn't capped - see the old comment this replaced);
+        // only the Pharmacy Hospital issue screen passes `page` for a true
+        // server-side paged list.
+        List<StockSearchRow> raw;
+        int totalCount;
+        if (page.HasValue)
+        {
+            var paged = await ordered.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            raw = paged.Rows;
+            totalCount = paged.TotalCount;
+        }
+        else
+        {
+            raw = await ordered.ToListAsync();
+            totalCount = raw.Count;
+        }
 
         var rows = raw.Select(x =>
         {
@@ -99,9 +115,31 @@ public class PharmacySalesController : ControllerBase
                 x.InvoiceNumber,
                 x.DistributorName
             };
-        });
+        }).ToList();
+
+        if (page.HasValue)
+        {
+            return Ok(new { rows, totalCount });
+        }
 
         return Ok(rows);
+    }
+
+    private sealed class StockSearchRow
+    {
+        public int Id { get; set; }
+        public string Manufacturer { get; set; } = "";
+        public string Hsn { get; set; } = "";
+        public string ProductName { get; set; } = "";
+        public string Packing { get; set; } = "";
+        public string BatchNo { get; set; } = "";
+        public DateTime ExpiryDate { get; set; }
+        public decimal Mrp { get; set; }
+        public int TabletsPerStrip { get; set; }
+        public int RemainingTablets { get; set; }
+        public string MedicineType { get; set; } = "";
+        public string InvoiceNumber { get; set; } = "";
+        public string DistributorName { get; set; } = "";
     }
 
     [HttpGet]
@@ -556,21 +594,37 @@ public class PharmacySalesController : ControllerBase
     // has no historical snapshot to reconstruct a past closing balance from -
     // see PharmacyPurchasesController/PharmacyExpiryController for where
     // that counter is mutated).
+    // Purchases/Sales/Closing Stock have to be grouped per (ProductName, Mrp)
+    // in C# after the purchase items are fetched (one ledger row can't map
+    // 1:1 to one report row - see the comment below), so unlike the other
+    // converted screens, sort/search/paging here run over an in-memory List
+    // rather than being pushed into the SQL query via ToPagedResultAsync.
+    // searchColumn/searchText replaces the old free-text `search` param for
+    // consistency with every other converted screen; Product Name is the
+    // only real per-row column available before grouping, so it's the only
+    // entry in the dropdown.
     [HttpGet("stock-report")]
     public async Task<IActionResult> StockReport(
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
-        [FromQuery] string? search)
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? searchColumn,
+        [FromQuery] string? searchText,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection)
     {
         var purchaseItemsQuery = _db.PharmacyPurchaseItems
             .Include(x => x.MedicineType)
             .Include(x => x.PurchaseInvoice)
             .Where(x => x.PurchaseInvoice != null && !x.PurchaseInvoice.IsDeleted);
 
-        if (!string.IsNullOrWhiteSpace(search))
+        if (!string.IsNullOrWhiteSpace(searchText))
         {
-            var text = search.Trim();
-            purchaseItemsQuery = purchaseItemsQuery.Where(x => x.ProductName.Contains(text));
+            purchaseItemsQuery = searchColumn switch
+            {
+                _ => purchaseItemsQuery.Where(x => x.ProductName.Contains(searchText))
+            };
         }
 
         var purchaseItems = await purchaseItemsQuery.ToListAsync();
@@ -604,7 +658,7 @@ public class PharmacySalesController : ControllerBase
             return "Unit|Unit";
         }
 
-        var rows = purchaseItems
+        var allRows = purchaseItems
             .GroupBy(x => (x.ProductName, x.Mrp))
             .Select(g =>
             {
@@ -643,14 +697,48 @@ public class PharmacySalesController : ControllerBase
                     ClosingStockAmount = closingStockAmount
                 };
             })
-            .OrderBy(x => x.ProductName)
-            .ThenBy(x => x.Mrp)
             .ToList();
+
+        // The Total Closing Stock Value card always reflects every matching
+        // (filtered) row, not just the current page - computed before paging.
+        var totalClosingStockAmount = Math.Round(allRows.Sum(x => x.ClosingStockAmount), 2);
+
+        var descending = sortDirection == "desc";
+        var sorted = sortBy switch
+        {
+            "mrp" => descending ? allRows.OrderByDescending(x => x.Mrp) : allRows.OrderBy(x => x.Mrp),
+            "closingStockAmount" => descending ? allRows.OrderByDescending(x => x.ClosingStockAmount) : allRows.OrderBy(x => x.ClosingStockAmount),
+            _ => descending
+                ? allRows.OrderByDescending(x => x.ProductName).ThenByDescending(x => x.Mrp)
+                : allRows.OrderBy(x => x.ProductName).ThenBy(x => x.Mrp)
+        };
+
+        var sortedRows = sorted.ToList();
+        var totalCount = sortedRows.Count;
+
+        // Paging is opt-in via `page` - the screen's own "Export Excel"
+        // button needs every matching/sorted row at once (not just the
+        // current page), so it calls this same endpoint without `page` and
+        // gets the full filtered array back instead.
+        if (!page.HasValue)
+        {
+            return Ok(new
+            {
+                rows = sortedRows,
+                totalCount,
+                totalClosingStockAmount
+            });
+        }
+
+        var pageNumber = Math.Max(1, page.Value);
+        var size = Math.Clamp(pageSize ?? 10, 1, 200);
+        var pagedRows = sortedRows.Skip((pageNumber - 1) * size).Take(size).ToList();
 
         return Ok(new
         {
-            rows,
-            totalClosingStockAmount = Math.Round(rows.Sum(x => x.ClosingStockAmount), 2)
+            rows = pagedRows,
+            totalCount,
+            totalClosingStockAmount
         });
     }
 }
