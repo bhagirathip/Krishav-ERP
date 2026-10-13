@@ -33,7 +33,6 @@ const doctorMode = defineModel('doctorMode');
 const outsideDoctorName = defineModel('outsideDoctorName');
 const walkInPatientName = defineModel('walkInPatientName');
 const walkInPhone = defineModel('walkInPhone');
-const paymentMode = defineModel('paymentMode');
 const roundOff = defineModel('roundOff');
 const billSearch = defineModel('billSearch');
 const billSearchPage = defineModel('billSearchPage');
@@ -42,10 +41,10 @@ const billSearchPage = defineModel('billSearchPage');
 <template>
   <div class="card">
     <h2>Create Pharmacy Bill</h2>
+    <div class="muted">Creating the bill doesn't charge the stock yet - medicine is only deducted once the bill is paid in full from the Pharmacy Bills screen. Until then it can still be edited there.</div>
 
     <div class="form-grid">
       <label>Patient<select v-model.number="patientId"><option :value="null">Walk-in Patient</option><option v-for="p in patients" :key="p.id" :value="p.id">{{ p.name }} · {{ p.patientCode }} · {{ p.phone }}</option></select></label>
-      <label>Payment Mode<select v-model="paymentMode"><option>Cash</option><option>UPI</option><option>Card</option><option>Bank Transfer</option><option>Other</option></select></label>
     </div>
 
     <div v-if="patientId && selectedPatient" class="card patient-summary-card">
@@ -97,7 +96,7 @@ const billSearchPage = defineModel('billSearchPage');
       </tr>
     </table>
 
-    <div class="bill-total-box"><div><span>Before Discount</span><b>₹{{ totals.gross.toFixed(2) }}</b></div><div><span>Discount</span><b>₹{{ totals.discount.toFixed(2) }}</b></div><div><span>Round Off (-9 to 9)</span><input v-model.number="roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block"></div><div class="grand"><span>Total</span><b>₹{{ totals.net.toFixed(2) }}</b></div></div>
-    <div class="modal-actions"><button v-if="can('PHARMACY_SALES','add')" @click="createSale">Complete Sale</button></div>
+    <div class="bill-total-box"><div><span>Before Discount</span><b>₹{{ totals.gross.toFixed(2) }}</b></div><div><span>Discount</span><b>₹{{ totals.discount.toFixed(2) }}</b></div><div><span>Round Off (-9 to 9)</span><input v-model.number="roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block" @focus="$event.target.select()"></div><div class="grand"><span>Total</span><b>₹{{ totals.net.toFixed(2) }}</b></div></div>
+    <div class="modal-actions"><button v-if="can('PHARMACY_SALES','add')" @click="createSale">Create Bill</button></div>
   </div>
 </template>

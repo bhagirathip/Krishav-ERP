@@ -7,6 +7,7 @@ using KrishavERP.Api.Modules.Lab;
 using KrishavERP.Api.Modules.Lab.Controllers;
 using KrishavERP.Api.Modules.Doctors;
 using KrishavERP.Api.Modules.Auth;
+using KrishavERP.Api.Modules.Pharmacy;
 using System.Security.Claims;
 
 namespace KrishavERP.Api.Modules.Billing.Controllers;
@@ -127,6 +128,16 @@ public class BillsController : ControllerBase
         var doctors = await _db.Doctors.Where(x => doctorIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id);
         var referrers = await _db.Referrers.Where(x => referrerIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id);
 
+        // Pharmacy Bills needs to know, per bill, whether the underlying
+        // sale is still a draft (not yet paid in full, stock not yet
+        // committed) so it can show Edit only for those - same batched
+        // dictionary-lookup shape as patients/doctors/referrers above.
+        var billIds = bills.Select(x => x.Id).ToList();
+        var pharmacySales = await _db.PharmacySales
+            .Where(x => billIds.Contains(x.BillId))
+            .Select(x => new { x.BillId, x.Id, x.StockDeducted })
+            .ToDictionaryAsync(x => x.BillId);
+
         var shaped = bills.Select(bill => new
         {
             bill.Id,
@@ -153,7 +164,9 @@ public class BillsController : ControllerBase
             bill.CreatedAtUtc,
             bill.BillDate,
             bill.Items,
-            bill.Payments
+            bill.Payments,
+            PharmacySaleId = pharmacySales.TryGetValue(bill.Id, out var pharmacySale) ? pharmacySale.Id : (int?)null,
+            PharmacyStockDeducted = pharmacySales.TryGetValue(bill.Id, out var pharmacySale2) ? pharmacySale2.StockDeducted : (bool?)null
         }).ToList();
 
         if (page.HasValue)
@@ -511,16 +524,55 @@ public class BillsController : ControllerBase
         _db.Payments.Add(new Payment { BillId = id, Amount = request.Amount, Mode = request.Mode, Reference = request.Reference, PaidAtUtc = paidAt });
         bill.PaidAmount += request.Amount;
         bill.Status = bill.PaidAmount >= bill.NetAmount ? "Paid" : "Partially Paid";
+
+        // A pharmacy sale created as a draft (PharmacySalesController.Create)
+        // never touched the shelf - the moment its bill is actually paid in
+        // full is "the purchase is complete", which is when stock finally
+        // gets deducted and the sale locks against further editing. IPD
+        // dispensing already deducted stock at creation (StockDeducted is
+        // already true there), so this never re-fires for those.
+        if (bill.BillType == "Pharmacy" && bill.Status == "Paid")
+        {
+            var sale = await _db.PharmacySales.Include(x => x.Items).FirstOrDefaultAsync(x => x.BillId == id);
+            if (sale != null && !sale.StockDeducted)
+            {
+                foreach (var item in sale.Items)
+                {
+                    var stock = await _db.PharmacyPurchaseItems.FindAsync(item.PurchaseItemId);
+                    if (stock == null || item.QuantityInTablets > stock.RemainingTablets)
+                    {
+                        return BadRequest(new
+                        {
+                            message = $"Only {stock?.RemainingTablets ?? 0} unit(s) of {item.ProductName} / batch {item.BatchNo} are left in stock - edit this bill to reduce the quantity before accepting full payment."
+                        });
+                    }
+                }
+
+                foreach (var item in sale.Items)
+                {
+                    var stock = await _db.PharmacyPurchaseItems.FindAsync(item.PurchaseItemId);
+                    stock!.RemainingTablets -= item.QuantityInTablets;
+                }
+
+                sale.StockDeducted = true;
+            }
+        }
+
         await _db.SaveChangesAsync();
         await transaction.CommitAsync();
         return Ok(bill);
     }
 
-    // Corrects the date on a payment that's already been recorded - e.g. a
-    // biller typed today's date by mistake when the money actually came in
-    // earlier. Available regardless of the bill's status (including fully
+    private static readonly string[] AllowedPaymentModes = { "Cash", "UPI", "Card", "Bank Transfer", "Other" };
+
+    // Corrects the date and/or mode on a payment that's already been
+    // recorded - e.g. a biller typed today's date by mistake when the money
+    // actually came in earlier, or logged it as Cash when it was actually
+    // UPI. Available regardless of the bill's status (including fully
     // Paid), unlike Pay above which only ever adds a new payment for a
-    // bill's remaining balance.
+    // bill's remaining balance. Only ever edits the one Payment row in
+    // place - never changes its Amount, so bill.PaidAmount/Status are
+    // untouched either way.
     [HttpPut("{billId:int}/payments/{paymentId:int}/date")]
     public async Task<IActionResult> UpdatePaymentDate(int billId, int paymentId, UpdatePaymentDateRequest request)
     {
@@ -529,6 +581,13 @@ public class BillsController : ControllerBase
 
         if (request.PaidAtUtc > DateTime.Now.AddMinutes(1))
             return BadRequest(new { message = "Payment date cannot be in the future." });
+
+        if (!string.IsNullOrWhiteSpace(request.Mode))
+        {
+            if (!AllowedPaymentModes.Contains(request.Mode))
+                return BadRequest(new { message = "Please select a valid payment mode." });
+            payment.Mode = request.Mode;
+        }
 
         payment.PaidAtUtc = request.PaidAtUtc;
         await _db.SaveChangesAsync();

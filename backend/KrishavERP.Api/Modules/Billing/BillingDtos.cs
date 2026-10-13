@@ -15,6 +15,7 @@ public class PaymentRequest
 public class UpdatePaymentDateRequest
 {
     public DateTime PaidAtUtc { get; set; }
+    public string? Mode { get; set; }
 }
 
 public class BillCreateRequest

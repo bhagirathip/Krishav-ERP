@@ -3,6 +3,7 @@ using KrishavERP.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace KrishavERP.Api.Modules.Expenses.Controllers;
 
@@ -18,24 +19,86 @@ public class ExpensesController : ControllerBase
         _db = db;
     }
 
+    // Paging/status/allDates are all opt-in the same way every other
+    // converted grid in this app works - status defaults to nothing (every
+    // row) when omitted, from/to are only applied when provided (the
+    // frontend's "All Dates" toggle just omits them), so nothing else
+    // reading this endpoint as a full-array source ever breaks.
     [HttpGet("daily")]
-    public async Task<IActionResult> Daily([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    public async Task<IActionResult> Daily(
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
+        [FromQuery] string? status,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] string? searchText)
     {
-        var start = (from ?? DateTime.Today).Date;
-        var end = (to ?? start).Date.AddDays(1);
-        var rows = await _db.DailyExpenses
-            .Where(x => x.ExpenseDate >= start && x.ExpenseDate < end)
-            .OrderByDescending(x => x.ExpenseDate)
-            .ThenByDescending(x => x.Id)
-            .ToListAsync();
+        var query = _db.DailyExpenses.AsQueryable();
+        if (from.HasValue) query = query.Where(x => x.ExpenseDate >= from.Value.Date);
+        if (to.HasValue) query = query.Where(x => x.ExpenseDate < to.Value.Date.AddDays(1));
+
+        query = status switch
+        {
+            "Paid" => query.Where(x => x.IsSettled),
+            "Unpaid" => query.Where(x => !x.IsSettled),
+            _ => query
+        };
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            query = query.Where(x =>
+                x.Category.Contains(searchText)
+                || x.Description.Contains(searchText)
+                || x.PaymentMode.Contains(searchText)
+                || (x.ReferenceNumber != null && x.ReferenceNumber.Contains(searchText)));
+        }
+
+        var descending = sortDirection == "desc";
+        query = sortBy switch
+        {
+            "expenseDate" => descending ? query.OrderByDescending(x => x.ExpenseDate) : query.OrderBy(x => x.ExpenseDate),
+            "category" => descending ? query.OrderByDescending(x => x.Category) : query.OrderBy(x => x.Category),
+            "amount" => descending ? query.OrderByDescending(x => x.Amount) : query.OrderBy(x => x.Amount),
+            _ => query.OrderByDescending(x => x.ExpenseDate).ThenByDescending(x => x.Id)
+        };
+
+        // The "Total Expenses" footer always sums every row matching the
+        // current filters, not just the current page.
+        var totalAmount = await query.SumAsync(x => (decimal?)x.Amount) ?? 0;
+
+        List<DailyExpense> rows;
+        int totalCount;
+        if (page.HasValue)
+        {
+            var paged = await query.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            rows = paged.Rows;
+            totalCount = paged.TotalCount;
+        }
+        else
+        {
+            rows = await query.ToListAsync();
+            totalCount = rows.Count;
+        }
+
         var staff = await StaffMap(rows.Select(x => x.PaidByStaffId));
-        return Ok(rows.Select(x => new
+        var shaped = rows.Select(x => new
         {
             x.Id, x.ExpenseDate, x.Category, x.Description, x.Amount, x.PaymentMode,
             x.ReferenceNumber, x.Notes, x.PaidByStaffId,
             PaidByStaffName = x.PaidByStaffId.HasValue && staff.TryGetValue(x.PaidByStaffId.Value, out var n) ? n : "",
+            x.IsSettled, x.SettlementId,
+            AddedByAdministrator = x.CreatedByRole == "Administrator",
             x.CreatedAtUtc
-        }));
+        }).ToList();
+
+        if (page.HasValue)
+        {
+            return Ok(new { rows = shaped, totalCount, totalAmount });
+        }
+
+        return Ok(shaped);
     }
 
     [HttpPost("daily")]
@@ -55,7 +118,8 @@ public class ExpensesController : ControllerBase
             PaymentMode = request.PaymentMode,
             PaidByStaffId = request.PaidByStaffId,
             ReferenceNumber = request.ReferenceNumber?.Trim(),
-            Notes = request.Notes?.Trim()
+            Notes = request.Notes?.Trim(),
+            CreatedByRole = await CurrentUserRoleAsync() ?? ""
         };
         _db.DailyExpenses.Add(row);
         await _db.SaveChangesAsync();
@@ -67,6 +131,7 @@ public class ExpensesController : ControllerBase
     {
         var row = await _db.DailyExpenses.FindAsync(id);
         if (row == null) return NotFound();
+        if (row.IsSettled) return BadRequest(new { message = "This expense has already been settled and can no longer be edited." });
         if (!await ValidStaff(request.PaidByStaffId))
             return BadRequest(new { message = "Please select a valid staff member who paid." });
         row.ExpenseDate = request.ExpenseDate.Date;
@@ -86,9 +151,119 @@ public class ExpensesController : ControllerBase
     {
         var row = await _db.DailyExpenses.FindAsync(id);
         if (row == null) return NotFound();
+        if (row.IsSettled) return BadRequest(new { message = "This expense has already been settled and can no longer be deleted." });
         _db.DailyExpenses.Remove(row);
         await _db.SaveChangesAsync();
         return Ok();
+    }
+
+    // Settles exactly one expense at a time - clicking Settle on a row locks
+    // it immediately (no edit/delete afterward, see EditDaily/DeleteDaily
+    // above) and, if it was paid out-of-pocket by a staff member
+    // (PaidByStaffId set), makes that amount reimbursable on that staff
+    // member's salary for the month the expense falls in (see
+    // StaffController.Payroll). Only an Administrator can settle - but never
+    // an expense the Administrator added themselves (CreatedByRole, set once
+    // at AddDaily time), so an admin can't review/approve their own entry.
+    [HttpPost("daily/{id:int}/settle")]
+    public async Task<IActionResult> SettleOneDaily(int id)
+    {
+        var expense = await _db.DailyExpenses.FindAsync(id);
+        if (expense == null) return NotFound();
+        if (expense.IsSettled) return BadRequest(new { message = "This expense has already been settled." });
+
+        var role = await CurrentUserRoleAsync();
+        if (role != "Administrator")
+            return BadRequest(new { message = "Only an Administrator can settle expenses." });
+        if (expense.CreatedByRole == "Administrator")
+            return BadRequest(new { message = "An expense added by an Administrator cannot be settled." });
+
+        var reimbursable = expense.PaidByStaffId.HasValue ? expense.Amount : 0m;
+
+        var settlement = new ExpenseSettlement
+        {
+            SettlementDateUtc = DateTime.Now,
+            TotalAmount = expense.Amount,
+            ReimbursedAmount = reimbursable,
+            SettledByRole = role ?? "Unknown"
+        };
+
+        _db.ExpenseSettlements.Add(settlement);
+        await _db.SaveChangesAsync();
+
+        settlement.SettlementNumber = $"ESET-{DateTime.Now:yyyyMMdd}-{settlement.Id:000000}";
+        expense.IsSettled = true;
+        expense.SettlementId = settlement.Id;
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            settlement.Id,
+            settlement.SettlementNumber,
+            settlement.TotalAmount,
+            settlement.ReimbursedAmount,
+            settlement.SettledByRole
+        });
+    }
+
+    [HttpGet("daily/settlements")]
+    public async Task<IActionResult> GetDailySettlements(
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? searchText)
+    {
+        var query = _db.ExpenseSettlements.AsQueryable();
+        if (!string.IsNullOrWhiteSpace(searchText))
+            query = query.Where(x => x.SettlementNumber.Contains(searchText));
+        query = query.OrderByDescending(x => x.Id);
+
+        List<ExpenseSettlement> rows;
+        int totalCount;
+        if (page.HasValue)
+        {
+            var paged = await query.ToPagedResultAsync(page.Value, pageSize ?? 10);
+            rows = paged.Rows;
+            totalCount = paged.TotalCount;
+        }
+        else
+        {
+            rows = await query.ToListAsync();
+            totalCount = rows.Count;
+        }
+
+        if (page.HasValue) return Ok(new { rows, totalCount });
+        return Ok(rows);
+    }
+
+    [HttpGet("daily/settlements/{id:int}")]
+    public async Task<IActionResult> GetDailySettlementDetail(int id)
+    {
+        var settlement = await _db.ExpenseSettlements.FindAsync(id);
+        if (settlement == null) return NotFound();
+
+        var expenses = await _db.DailyExpenses
+            .Where(x => x.SettlementId == id)
+            .OrderBy(x => x.ExpenseDate)
+            .ToListAsync();
+
+        var staff = await StaffMap(expenses.Select(x => x.PaidByStaffId));
+        var byDate = expenses
+            .GroupBy(x => x.ExpenseDate.Date)
+            .Select(g => new
+            {
+                Date = g.Key,
+                Expenses = g.Select(x => new
+                {
+                    x.Id, x.Category, x.Description, x.Amount, x.PaymentMode,
+                    x.PaidByStaffId,
+                    PaidByStaffName = x.PaidByStaffId.HasValue && staff.TryGetValue(x.PaidByStaffId.Value, out var n) ? n : ""
+                }),
+                DateTotal = g.Sum(x => x.Amount)
+            })
+            .OrderBy(x => x.Date)
+            .ToList();
+
+        return Ok(new { settlement, rows = byDate });
     }
 
     // Only the Pharmacy Expenses grid reads this endpoint (no other screen
@@ -368,6 +543,15 @@ public class ExpensesController : ControllerBase
     private async Task<bool> ValidStaff(int? id)
     {
         return !id.HasValue || await _db.StaffMembers.AnyAsync(x => x.Id == id.Value && x.IsActive);
+    }
+
+    private async Task<string?> CurrentUserRoleAsync()
+    {
+        var idText = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(idText, out var userId)) return null;
+        var user = await _db.AppUsers.FindAsync(userId);
+        if (user?.RoleId == null) return null;
+        return await _db.AppRoles.Where(x => x.Id == user.RoleId.Value).Select(x => x.Name).FirstOrDefaultAsync();
     }
 
     private async Task<Dictionary<int,string>> StaffMap(IEnumerable<int?> ids)

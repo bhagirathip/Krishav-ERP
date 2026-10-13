@@ -48,6 +48,11 @@ const paymentModal = ref(false);
 const selectedBill = ref(null);
 const payment = ref({ amount: 0, mode: 'Cash', reference: '', paymentDate: todayDate() });
 const paymentDatesModal = ref(null);
+const discounts = ref([]);
+
+async function loadDiscounts() {
+  discounts.value = (await api.get('/discounts', { params: { scope: 'Individual', activeOnly: true } })).data;
+}
 
 function openPayment(bill) {
   selectedBill.value = bill;
@@ -94,11 +99,12 @@ function openPaymentDates(bill) {
 async function savePaymentDate(paymentRow) {
   try {
     await api.put(`/bills/${paymentDatesModal.value.billId}/payments/${paymentRow.id}/date`, {
-      paidAtUtc: combineDateWithNowTime(paymentRow.paymentDate)
+      paidAtUtc: combineDateWithNowTime(paymentRow.paymentDate),
+      mode: paymentRow.mode
     });
     await reload();
   } catch (error) {
-    alert(error.response?.data?.message || 'Unable to update this payment date.');
+    alert(error.response?.data?.message || 'Unable to update this payment.');
   }
 }
 
@@ -115,6 +121,156 @@ function paymentModesText(bill) {
   if (bill.status !== 'Paid' || !bill.payments?.length) return '-';
   const modes = [...new Set(bill.payments.map(p => p.mode))];
   return modes.join(', ');
+}
+
+// Edit modal - only ever available while the sale is still a draft
+// (bill.pharmacyStockDeducted === false, see BillsController.Pay/
+// PharmacySalesController.Edit): quantities can change, items can be added
+// or removed, and nothing here touches stock - the server re-validates
+// availability and re-prices every line fresh on save, same as Create.
+const editModal = ref(null);
+const editSearch = ref('');
+const editSearchResults = ref([]);
+
+function packLabel(row) {
+  if (row.medicineType === 'Tablet') return 'Strip';
+  if (row.medicineType === 'Injection') return 'Pack';
+  return 'Unit';
+}
+function looseLabel(row) {
+  if (row.medicineType === 'Tablet') return 'Tablet';
+  if (row.medicineType === 'Injection') return 'Vial';
+  return 'Unit';
+}
+function editAllowedUnits(row) {
+  const pack = packLabel(row);
+  const loose = looseLabel(row);
+  return pack === loose ? [pack] : [pack, loose];
+}
+function editMaxQuantity(row) {
+  if (row.unitType === packLabel(row)) {
+    return Math.floor(Number(row.remainingUnits) / Math.max(Number(row.unitsPerPack), 1));
+  }
+  return Number(row.remainingUnits);
+}
+function editUpdateUnit(row) {
+  row.unitPrice = row.unitType === packLabel(row)
+    ? Number(row.mrp)
+    : Number(row.mrp) / Math.max(Number(row.unitsPerPack), 1);
+  row.quantity = 1;
+}
+
+async function openEdit(bill) {
+  if (!bill.pharmacySaleId) return;
+  try {
+    const [{ data: saleData }, { data: stock }] = await Promise.all([
+      api.get(`/pharmacy/sales/${bill.pharmacySaleId}/print`),
+      api.get('/pharmacy/sales/search', { params: { q: '' } })
+    ]);
+
+    const items = saleData.sale.items.map(item => {
+      const match = stock.find(s => s.id === item.purchaseItemId);
+      return {
+        purchaseItemId: item.purchaseItemId,
+        medicineType: match?.medicineType || '',
+        productName: item.productName,
+        packing: item.packing,
+        batchNo: item.batchNo,
+        mrp: Number(item.mrp),
+        unitsPerPack: Number(match?.unitsPerPack || 1),
+        remainingUnits: Number(match?.remainingTablets || 0),
+        unitType: item.unitType,
+        quantity: item.quantity,
+        unitPrice: Number(item.unitPrice),
+        discountTypeId: item.discountTypeId
+      };
+    });
+
+    editModal.value = {
+      billId: bill.id,
+      saleId: bill.pharmacySaleId,
+      billNumber: bill.billNumber,
+      roundOff: Number(bill.roundOff || 0),
+      items
+    };
+    editSearch.value = '';
+    editSearchResults.value = [];
+  } catch (error) {
+    alert(error.response?.data?.message || 'Unable to load this bill for editing.');
+  }
+}
+
+async function searchEditInventory() {
+  editSearchResults.value = (await api.get('/pharmacy/sales/search', { params: { q: editSearch.value } })).data;
+}
+
+function addEditItem(row) {
+  if (editModal.value.items.some(x => x.purchaseItemId === row.id)) return;
+  editModal.value.items.push({
+    purchaseItemId: row.id,
+    medicineType: row.medicineType,
+    productName: row.productName,
+    packing: row.packing,
+    batchNo: row.batchNo,
+    mrp: Number(row.mrp),
+    unitsPerPack: Number(row.unitsPerPack),
+    remainingUnits: Number(row.remainingTablets),
+    unitType: row.medicineType === 'Tablet' ? 'Strip' : row.medicineType === 'Injection' ? 'Pack' : 'Unit',
+    quantity: 1,
+    unitPrice: Number(row.mrp),
+    discountTypeId: null
+  });
+}
+
+function removeEditItem(index) {
+  editModal.value.items.splice(index, 1);
+}
+
+function editRowGross(row) {
+  return Number(row.unitPrice || 0) * Number(row.quantity || 0);
+}
+
+function editRowDiscount(row) {
+  const d = discounts.value.find(x => x.id === row.discountTypeId);
+  if (!d) return 0;
+  const gross = editRowGross(row), value = Number(d.value || 0);
+  return d.discountMode === 'Amount' ? Math.min(gross, value) : gross * Math.min(100, Math.max(0, value)) / 100;
+}
+
+function editRowTotal(row) {
+  return Math.max(0, editRowGross(row) - editRowDiscount(row));
+}
+
+function editTotals() {
+  if (!editModal.value) return { gross: 0, discount: 0, net: 0 };
+  const gross = editModal.value.items.reduce((s, r) => s + editRowGross(r), 0);
+  const discount = editModal.value.items.reduce((s, r) => s + editRowDiscount(r), 0);
+  return { gross, discount, net: gross - discount + Number(editModal.value.roundOff || 0) };
+}
+
+async function saveEdit() {
+  if (!editModal.value.items.length) {
+    alert('Add at least one medicine to the bill.');
+    return;
+  }
+  try {
+    const { data } = await api.put(`/pharmacy/sales/${editModal.value.saleId}`, {
+      roundOff: Number(editModal.value.roundOff || 0),
+      items: editModal.value.items.map(x => ({
+        purchaseItemId: x.purchaseItemId,
+        unitType: x.unitType,
+        quantity: x.quantity,
+        discountTypeId: x.discountTypeId
+      }))
+    });
+    if (data.refundAmount > 0) {
+      alert(`₹${Number(data.refundAmount).toFixed(2)} refunded - the edited total is less than what was already paid.`);
+    }
+    editModal.value = null;
+    await reload();
+  } catch (error) {
+    alert(error.response?.data?.message || 'Unable to save changes to this bill.');
+  }
 }
 
 // Return Items modal - loads what's still returnable on the sale linked to
@@ -291,7 +447,9 @@ async function printBill(bill) {
 </html>`);
 }
 
-onMounted(load);
+onMounted(async () => {
+  await Promise.all([load(), loadDiscounts()]);
+});
 </script>
 
 <template>
@@ -322,6 +480,7 @@ onMounted(load);
       <th class="sortable" @click="sortBy('paidAmount')">Paid <span class="sort-indicator">{{ sortIndicator('paidAmount') }}</span></th>
       <th>Outstanding</th>
       <th class="sortable" @click="sortBy('status')">Status <span class="sort-indicator">{{ sortIndicator('status') }}</span></th>
+      <th>Purchase</th>
       <th>Mode</th>
       <th>Last Payment</th>
       <th>Returned</th>
@@ -334,14 +493,16 @@ onMounted(load);
       <td>₹{{ Number(bill.paidAmount).toFixed(2) }}</td>
       <td>₹{{ Number(bill.netAmount - bill.paidAmount).toFixed(2) }}</td>
       <td>{{ bill.status }}</td>
+      <td>{{ bill.pharmacyStockDeducted === false ? 'Pending' : 'Completed' }}</td>
       <td>{{ paymentModesText(bill) }}</td>
       <td>{{ lastPaymentText(bill) }}</td>
       <td>{{ Number(bill.refundedAmount || 0) > 0 ? '₹' + Number(bill.refundedAmount).toFixed(2) : '-' }}</td>
       <td class="actions">
         <button @click="printBill(bill)">Print</button>
         <button v-if="bill.status !== 'Paid'" @click="openPayment(bill)">Accept Payment</button>
-        <button v-if="can('PHARMACY_BILLS', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment Date</button>
-        <button v-if="can('PHARMACY_BILLS', 'edit')" @click="openReturn(bill)">Return Items</button>
+        <button v-if="can('PHARMACY_BILLS', 'edit') && bill.pharmacyStockDeducted === false" @click="openEdit(bill)">Edit</button>
+        <button v-if="can('PHARMACY_BILLS', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment</button>
+        <button v-if="can('PHARMACY_BILLS', 'edit') && bill.pharmacyStockDeducted !== false" @click="openReturn(bill)">Return Items</button>
       </td>
     </tr>
   </table>
@@ -371,16 +532,79 @@ onMounted(load);
     </div>
   </div>
 
+  <div v-if="editModal" class="modal-bg">
+    <div class="modal modal-xl">
+      <button class="modal-close-x" @click="editModal = null">×</button>
+      <h2>Edit Bill &middot; {{ editModal.billNumber }}</h2>
+      <div class="muted">This purchase hasn't been completed yet - quantities can still change and nothing has been deducted from stock.</div>
+
+      <div class="toolbar" style="margin-top:12px">
+        <input style="max-width:420px" v-model="editSearch" placeholder="Search product, MF, batch or HSN" @input="searchEditInventory">
+        <button @click="searchEditInventory">Search</button>
+      </div>
+      <table v-if="editSearchResults.length" class="table">
+        <tr><th>Type</th><th>Product</th><th>Batch</th><th>MRP</th><th>Stock</th><th></th></tr>
+        <tr v-for="row in editSearchResults" :key="row.id">
+          <td>{{ row.medicineType }}</td>
+          <td>{{ row.productName }}</td>
+          <td>{{ row.batchNo }}</td>
+          <td>₹{{ Number(row.mrp).toFixed(2) }}</td>
+          <td>{{ row.availablePacks }} pack(s) + {{ row.looseUnits }} loose</td>
+          <td><button @click="addEditItem(row)">Add</button></td>
+        </tr>
+      </table>
+
+      <h3>Medicines</h3>
+      <table class="table">
+        <tr><th>Product</th><th>Batch</th><th>Sale Unit</th><th>Quantity</th><th>Price</th><th>Discount</th><th>Total</th><th></th></tr>
+        <tr v-for="(row, index) in editModal.items" :key="row.purchaseItemId">
+          <td>{{ row.productName }}<div class="muted">{{ row.packing }}</div></td>
+          <td>{{ row.batchNo }}</td>
+          <td><select v-model="row.unitType" @change="editUpdateUnit(row)"><option v-for="u in editAllowedUnits(row)" :key="u">{{ u }}</option></select></td>
+          <td><input type="number" min="1" :max="editMaxQuantity(row)" v-model.number="row.quantity"><div class="muted">Max {{ editMaxQuantity(row) }} {{ row.unitType }}</div></td>
+          <td>₹{{ Number(row.unitPrice).toFixed(2) }}</td>
+          <td>
+            <select v-model.number="row.discountTypeId">
+              <option :value="null">No Discount</option>
+              <option v-for="d in discounts" :key="d.id" :value="d.id">{{ d.name }} · {{ d.discountMode === 'Percent' ? d.value + '%' : '₹' + Number(d.value).toFixed(2) }}</option>
+            </select>
+          </td>
+          <td><b>₹{{ editRowTotal(row).toFixed(2) }}</b></td>
+          <td><button class="danger-btn" @click="removeEditItem(index)">×</button></td>
+        </tr>
+      </table>
+
+      <div class="bill-total-box consistent-total">
+        <div><span>Before Discount</span><b>₹{{ editTotals().gross.toFixed(2) }}</b></div>
+        <div><span>Discount</span><b>₹{{ editTotals().discount.toFixed(2) }}</b></div>
+        <div>
+          <span>Round Off (-9 to 9)</span>
+          <input v-model.number="editModal.roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block" @focus="$event.target.select()">
+        </div>
+        <div class="grand"><span>Total</span><b>₹{{ editTotals().net.toFixed(2) }}</b></div>
+      </div>
+
+      <div class="modal-actions">
+        <button @click="saveEdit">Save Changes</button>
+        <button class="secondary" @click="editModal = null">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="paymentDatesModal" class="modal-bg">
     <div class="modal">
       <button class="modal-close-x" @click="paymentDatesModal = null">×</button>
-      <h2>Edit Payment Date &middot; {{ paymentDatesModal.billNumber }}</h2>
-      <div class="muted">Corrects the date on a payment already recorded - doesn't change the amount or add a new payment.</div>
+      <h2>Edit Payment &middot; {{ paymentDatesModal.billNumber }}</h2>
+      <div class="muted">Corrects the date and/or mode on a payment already recorded - doesn't change the amount or add a new payment.</div>
       <table class="table" style="margin-top:12px">
         <tr><th>Amount</th><th>Mode</th><th>Date</th><th></th></tr>
         <tr v-for="p in paymentDatesModal.payments" :key="p.id">
           <td>₹{{ Number(p.amount).toFixed(2) }}</td>
-          <td>{{ p.mode }}</td>
+          <td>
+            <select v-model="p.mode">
+              <option>Cash</option><option>UPI</option><option>Card</option><option>Bank Transfer</option><option>Other</option>
+            </select>
+          </td>
           <td><input v-model="p.paymentDate" type="date" :max="todayDate()"></td>
           <td><button @click="savePaymentDate(p)">Save</button></td>
         </tr>

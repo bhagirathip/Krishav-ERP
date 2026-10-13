@@ -1,19 +1,54 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { api } from '../../api';
+import { can, role } from '../../auth';
 import GridSearch from '../../components/GridSearch.vue';
 import Pagination from '../../components/Pagination.vue';
-import { useGrid } from '../../composables/useGrid';
+import { useServerGrid } from '../../composables/useServerGrid';
+
+// Only an Administrator can settle expenses (see
+// ExpensesController.SettleOneDaily) - hidden entirely for everyone else
+// rather than shown and rejected. Even for an Administrator, the button
+// still won't show on a row they added themselves (x.addedByAdministrator,
+// see the template) - an admin can't review/approve their own entry.
+const isAdministrator = role() === 'Administrator';
 
 const today = new Date().toISOString().slice(0, 10);
-const from = ref(today);
-const to = ref(today);
-const rows = ref([]);
+const pageSize = 10;
 const staff = ref([]);
 const show = ref(false);
 const form = ref(blank());
-const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } = useGrid(rows, 10);
-const total = computed(() => sortedRows.value.reduce((s, x) => s + Number(x.amount || 0), 0));
+const totalAmount = ref(0);
+
+const tab = ref('Unpaid');
+const allDates = ref(true);
+const dateFrom = ref(today);
+const dateTo = ref(today);
+
+async function fetchDailyExpensesPage(params) {
+  const dateParams = allDates.value ? {} : { from: dateFrom.value, to: dateTo.value };
+  const { data } = await api.get('/expenses/daily', {
+    params: {
+      status: tab.value,
+      ...dateParams,
+      page: params.page,
+      pageSize: params.pageSize,
+      searchText: params.searchText,
+      sortBy: params.sortBy,
+      sortDirection: params.sortDirection
+    }
+  });
+  totalAmount.value = data.totalAmount;
+  return { rows: data.rows, totalCount: data.totalCount };
+}
+
+const { page, pageCount, rows: pagedRows, totalCount, sortBy, sortIndicator, searchText, reload } = useServerGrid(fetchDailyExpensesPage, pageSize);
+
+async function changeTab(value) {
+  tab.value = value;
+  page.value = 1;
+  await reload();
+}
 
 function blank() {
   return {
@@ -29,12 +64,26 @@ function blank() {
   };
 }
 
+// Settle - locks this one expense from further Edit/Delete. If it was paid
+// out-of-pocket by a staff member, its amount becomes a Reimbursement on
+// that staff member's salary for the month it falls in.
+const settlingId = ref(null);
+
+async function settleOne(expense) {
+  if (!confirm(`Settle ₹${Number(expense.amount).toFixed(2)} - ${expense.description}?${expense.paidByStaffName ? ` This will be added as a Reimbursement on ${expense.paidByStaffName}'s salary.` : ''}`)) return;
+  settlingId.value = expense.id;
+  try {
+    await api.post(`/expenses/daily/${expense.id}/settle`);
+    await load();
+  } catch (error) {
+    alert(error.response?.data?.message || 'Unable to settle this expense.');
+  } finally {
+    settlingId.value = null;
+  }
+}
+
 async function load() {
-  const [r, s] = await Promise.all([
-    api.get('/expenses/daily', { params: { from: from.value, to: to.value } }),
-    api.get('/staff')
-  ]);
-  rows.value = r.data;
+  const [s] = await Promise.all([api.get('/staff'), reload()]);
   staff.value = s.data;
 }
 
@@ -53,16 +102,23 @@ async function save() {
     alert('Description and amount are required.');
     return;
   }
-  if (form.value.id) await api.put(`/expenses/daily/${form.value.id}`, form.value);
-  else await api.post('/expenses/daily', form.value);
-  show.value = false;
-  await load();
+  try {
+    if (form.value.id) await api.put(`/expenses/daily/${form.value.id}`, form.value);
+    else await api.post('/expenses/daily', form.value);
+    show.value = false;
+    await load();
+  } catch (error) {
+    alert(error.response?.data?.message || 'Unable to save this expense.');
+  }
 }
 
 async function remove(x) {
-  if (confirm('Delete this expense?')) {
+  if (!confirm('Delete this expense?')) return;
+  try {
     await api.delete(`/expenses/daily/${x.id}`);
     await load();
+  } catch (error) {
+    alert(error.response?.data?.message || 'Unable to delete this expense.');
   }
 }
 
@@ -71,22 +127,31 @@ onMounted(load);
 <template>
   <h1>Daily Expenses</h1>
   <div class="toolbar">
-    <label>From<input type="date" v-model="from"></label>
-    <label>To<input type="date" v-model="to"></label>
-    <button @click="load">Apply</button>
     <button @click="add">+ Add Expense</button>
+    <button :class="tab === 'Unpaid' ? '' : 'secondary'" @click="changeTab('Unpaid')">Unpaid</button>
+    <button :class="tab === 'Paid' ? '' : 'secondary'" @click="changeTab('Paid')">Paid</button>
+    <button :class="tab === 'All' ? '' : 'secondary'" @click="changeTab('All')">All</button>
   </div>
-  <GridSearch v-model="search" placeholder="Search category, description, payment mode, paid by staff, reference..." />
+
+  <div class="toolbar report-filter">
+    <label class="toggle-row"><input type="checkbox" v-model="allDates" @change="load"> All Dates</label>
+    <label v-if="!allDates">From<input type="date" v-model="dateFrom"></label>
+    <label v-if="!allDates">To<input type="date" v-model="dateTo"></label>
+    <button v-if="!allDates" @click="load">Apply</button>
+  </div>
+
+  <GridSearch v-model="searchText" placeholder="Search category, description, payment mode, reference..." />
 
   <table class="table">
     <tr>
-      <th class="sortable" @click="sortBy('expenseDate')">Date {{ sortIndicator('expenseDate') }}</th>
-      <th>Category</th>
+      <th class="sortable" @click="sortBy('expenseDate')">Date <span class="sort-indicator">{{ sortIndicator('expenseDate') }}</span></th>
+      <th class="sortable" @click="sortBy('category')">Category <span class="sort-indicator">{{ sortIndicator('category') }}</span></th>
       <th>Description</th>
       <th>Mode</th>
       <th>Paid By Staff</th>
       <th>Reference</th>
-      <th>Amount</th>
+      <th class="sortable" @click="sortBy('amount')">Amount <span class="sort-indicator">{{ sortIndicator('amount') }}</span></th>
+      <th>Status</th>
       <th></th>
     </tr>
     <tr v-for="x in pagedRows" :key="x.id">
@@ -97,14 +162,19 @@ onMounted(load);
       <td>{{ x.paidByStaffName || '-' }}</td>
       <td>{{ x.referenceNumber || '-' }}</td>
       <td>₹{{ Number(x.amount).toFixed(2) }}</td>
+      <td>{{ x.isSettled ? 'Paid' : 'Unpaid' }}</td>
       <td class="actions">
-        <button @click="edit(x)">Edit</button>
-        <button class="danger-btn" @click="remove(x)">Delete</button>
+        <template v-if="!x.isSettled">
+          <button @click="edit(x)">Edit</button>
+          <button class="danger-btn" @click="remove(x)">Delete</button>
+          <button v-if="can('EXPENSE_DAILY', 'edit') && isAdministrator && !x.addedByAdministrator" :disabled="settlingId === x.id" @click="settleOne(x)">Settle</button>
+        </template>
+        <span v-else class="muted">Settled</span>
       </td>
     </tr>
   </table>
-  <div class="bill-total-box"><div class="grand"><span>Total Expenses</span><b>₹{{ total.toFixed(2) }}</b></div></div>
-  <Pagination :page="page" :page-count="pageCount" :total="sortedRows.length" :page-size="10" @update:page="page=$event" />
+  <div class="bill-total-box"><div class="grand"><span>Total Expenses</span><b>₹{{ totalAmount.toFixed(2) }}</b></div></div>
+  <Pagination :page="page" :page-count="pageCount" :total="totalCount" :page-size="pageSize" @update:page="page=$event" />
 
   <div v-if="show" class="modal-bg">
     <div class="modal">

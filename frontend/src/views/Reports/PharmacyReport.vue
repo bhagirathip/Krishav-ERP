@@ -8,9 +8,15 @@ const from = ref(todayText);
 const to = ref(todayText);
 const year = ref(today.getFullYear());
 const data = ref({ monthly: [], distributorBreakdown: [] });
+const paymentMode = ref({ rows: [], totalCash: 0, totalOnline: 0, grandTotal: 0 });
 
 async function load() {
-  data.value = (await api.get('/module-reports/pharmacy', { params: { from: from.value, to: to.value, year: year.value } })).data;
+  const [reportRes, paymentModeRes] = await Promise.all([
+    api.get('/module-reports/pharmacy', { params: { from: from.value, to: to.value, year: year.value } }),
+    api.get('/reporting/payment-mode-by-bill-type-pharmacy', { params: { from: from.value, to: to.value } })
+  ]);
+  data.value = reportRes.data;
+  paymentMode.value = paymentModeRes.data;
 }
 
 function money(v) {
@@ -51,6 +57,10 @@ onMounted(load);
       <div class="metric">₹{{ money(data.salesAmount) }}</div>
     </div>
     <div class="card">
+      <div class="muted">Customer Returns</div>
+      <div class="metric">₹{{ money(data.customerReturnAmount) }}</div>
+    </div>
+    <div class="card">
       <div class="muted">Expiry Return</div>
       <div class="metric">₹{{ money(data.expiryReturnAmount) }}</div>
     </div>
@@ -76,6 +86,27 @@ onMounted(load);
         <td>₹{{ money(x.purchaseAmount) }}</td>
         <td>₹{{ money(x.cashAmount) }}</td>
         <td>₹{{ money(x.creditAmount) }}</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>Cash vs Online by Bill Type</h2>
+    <div class="muted">Showing {{ from }} to {{ to }}</div>
+    <div v-if="!paymentMode.rows?.length" class="muted">No payments received for this period.</div>
+    <table v-else class="table">
+      <tr><th>Bill Type</th><th>Cash</th><th>Online</th><th>Total</th></tr>
+      <tr v-for="row in paymentMode.rows" :key="row.billType">
+        <td>{{ row.billType }}</td>
+        <td>₹{{ money(row.cash) }}</td>
+        <td>₹{{ money(row.online) }}</td>
+        <td><b>₹{{ money(row.total) }}</b></td>
+      </tr>
+      <tr>
+        <td><b>Total</b></td>
+        <td><b>₹{{ money(paymentMode.totalCash) }}</b></td>
+        <td><b>₹{{ money(paymentMode.totalOnline) }}</b></td>
+        <td><b>₹{{ money(paymentMode.grandTotal) }}</b></td>
       </tr>
     </table>
   </div>

@@ -44,6 +44,12 @@ public class SalaryPayment
     public decimal AbsentDays { get; set; }
     public decimal HalfDays { get; set; }
     public decimal DeductionAmount { get; set; }
+
+    // Amount folded in from this staff member's own settled, out-of-pocket
+    // DailyExpense rows for this payroll month (see StaffController.Payroll/
+    // GetReimbursementTotals) - added into PayableAmount, shown separately
+    // so it's auditable rather than a silent bump to the total.
+    public decimal ReimbursementAmount { get; set; }
     public decimal PayableAmount { get; set; }
     public decimal PaidAmount { get; set; }
     public DateTime? PaymentDate { get; set; }

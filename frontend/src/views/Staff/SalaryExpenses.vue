@@ -15,11 +15,12 @@ const { search, page, pageCount, pagedRows, sortedRows, sortBy, sortIndicator } 
 const totals = computed(() => rows.value.reduce((a, x) => ({
   gross: a.gross + Number(x.monthlySalary || 0),
   deduction: a.deduction + Number(x.deductionAmount || 0),
+  reimbursement: a.reimbursement + Number(x.reimbursementAmount || 0),
   payable: a.payable + Number(x.payableAmount || 0),
   paid: a.paid + Number(x.paidAmount || 0),
   prevOutstanding: a.prevOutstanding + Number(x.previousOutstanding || 0),
   totalPayable: a.totalPayable + Number(x.totalPayable || 0)
-}), { gross: 0, deduction: 0, payable: 0, paid: 0, prevOutstanding: 0, totalPayable: 0 }));
+}), { gross: 0, deduction: 0, reimbursement: 0, payable: 0, paid: 0, prevOutstanding: 0, totalPayable: 0 }));
 
 async function load() {
   const [r, s] = await Promise.all([
@@ -206,7 +207,7 @@ onMounted(load);
   <table class="table">
     <tr>
       <th>Staff</th><th>Salary</th><th>Present</th><th>Absent</th><th>Half Day</th><th>WeekOff</th><th>Leave</th><th>Not Marked</th>
-      <th>Deduction</th><th>Payable</th><th>Paid</th><th>Outstanding</th><th>Prev. Outstanding</th><th>Total Payable</th><th></th>
+      <th>Deduction</th><th>Reimbursement</th><th>Payable</th><th>Paid</th><th>Outstanding</th><th>Prev. Outstanding</th><th>Total Payable</th><th></th>
     </tr>
     <tr v-for="row in pagedRows" :key="row.id">
       <td><b>{{ row.name }}</b><div class="muted">{{ row.staffCode }} · {{ row.designation || '-' }}</div></td>
@@ -218,6 +219,7 @@ onMounted(load);
       <td>{{ row.leaveDays }}</td>
       <td>{{ row.unmarkedDays }}</td>
       <td>₹{{ Number(row.deductionAmount).toFixed(0) }}</td>
+      <td :class="{ 'positive-text': Number(row.reimbursementAmount) > 0 }">₹{{ Number(row.reimbursementAmount).toFixed(0) }}</td>
       <td><b>₹{{ Number(row.payableAmount).toFixed(0) }}</b></td>
       <td>₹{{ Number(row.paidAmount).toFixed(0) }}</td>
       <td>₹{{ Number(row.outstanding).toFixed(0) }}</td>
@@ -229,6 +231,7 @@ onMounted(load);
   <div class="bill-total-box">
     <div><span>Gross Salary</span><b>₹{{ totals.gross.toFixed(0) }}</b></div>
     <div><span>Deductions</span><b>₹{{ totals.deduction.toFixed(0) }}</b></div>
+    <div><span>Reimbursements</span><b>₹{{ totals.reimbursement.toFixed(0) }}</b></div>
     <div><span>Payable</span><b>₹{{ totals.payable.toFixed(0) }}</b></div>
     <div><span>Prev. Outstanding</span><b>₹{{ totals.prevOutstanding.toFixed(0) }}</b></div>
     <div><span>Paid</span><b>₹{{ totals.paid.toFixed(0) }}</b></div>

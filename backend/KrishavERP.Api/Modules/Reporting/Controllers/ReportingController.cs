@@ -552,6 +552,58 @@ public class ReportingController : ControllerBase
         });
     }
 
+    // Pharmacy's own Cash-vs-Online split, mirroring payment-mode-by-bill-type
+    // above but scoped to Pharmacy bills only (that action explicitly
+    // excludes Pharmacy, since it's filed/reported separately everywhere
+    // else now - see GstFilingPharmacy). Grouped by BillType for symmetry
+    // with the hospital version even though every Pharmacy bill carries the
+    // same BillType today - refunds (negative Payment rows from
+    // PharmacyReturnsController) net themselves out automatically since
+    // this sums straight from the Payments table.
+    [HttpGet("payment-mode-by-bill-type-pharmacy")]
+    public async Task<IActionResult> GetPaymentModeByBillTypePharmacy(
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to)
+    {
+        var start = (from ?? DateTime.Today).Date;
+        var end = (to ?? DateTime.Today).Date.AddDays(1);
+
+        var payments =
+            await (from payment in _db.Payments
+                   join bill in _db.Bills on payment.BillId equals bill.Id
+                   where bill.Status != "Deleted" &&
+                         bill.BillType == "Pharmacy" &&
+                         payment.PaidAtUtc >= start &&
+                         payment.PaidAtUtc < end
+                   select new { bill.BillType, payment.Mode, payment.Amount })
+                  .ToListAsync();
+
+        var rows = payments
+            .GroupBy(x => x.BillType)
+            .Select(group =>
+            {
+                var cash = Math.Round(group.Where(x => x.Mode == "Cash").Sum(x => x.Amount), 2);
+                var online = Math.Round(group.Where(x => x.Mode != "Cash").Sum(x => x.Amount), 2);
+                return new
+                {
+                    BillType = group.Key,
+                    Cash = cash,
+                    Online = online,
+                    Total = cash + online
+                };
+            })
+            .OrderByDescending(x => x.Total)
+            .ToList();
+
+        return Ok(new
+        {
+            Rows = rows,
+            TotalCash = rows.Sum(x => x.Cash),
+            TotalOnline = rows.Sum(x => x.Online),
+            GrandTotal = rows.Sum(x => x.Total)
+        });
+    }
+
     [HttpGet("executive")]
     public async Task<IActionResult> Executive([FromQuery] DateTime? from,[FromQuery] DateTime? to)
     {
@@ -707,10 +759,13 @@ public class ReportingController : ControllerBase
         if (end < start) end = start;
         var endExclusive = end.AddDays(1);
 
+        // A draft walk-in/OPD bill (not yet paid in full, stock not yet
+        // committed - see PharmacySalesController.Create/BillsController.Pay)
+        // hasn't actually transacted, so it carries no GST liability yet.
         var saleItems = await (
             from item in _db.PharmacySaleItems
             join sale in _db.PharmacySales on item.PharmacySaleId equals sale.Id
-            where sale.SaleDateUtc >= start && sale.SaleDateUtc < endExclusive
+            where sale.SaleDateUtc >= start && sale.SaleDateUtc < endExclusive && sale.StockDeducted
             select new { sale.SaleDateUtc, item.TotalAmount, item.CgstPercent, item.SgstPercent }
         ).ToListAsync();
 

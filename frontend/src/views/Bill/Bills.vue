@@ -508,11 +508,12 @@ function openPaymentDates(bill) {
 async function savePaymentDate(paymentRow) {
   try {
     await api.put(`/bills/${paymentDatesModal.value.billId}/payments/${paymentRow.id}/date`, {
-      paidAtUtc: combineDateWithNowTime(paymentRow.paymentDate)
+      paidAtUtc: combineDateWithNowTime(paymentRow.paymentDate),
+      mode: paymentRow.mode
     });
     await load();
   } catch (error) {
-    alert(error.response?.data?.message || 'Unable to update this payment date.');
+    alert(error.response?.data?.message || 'Unable to update this payment.');
   }
 }
 
@@ -763,7 +764,7 @@ onMounted(load);
           <button @click="printBill(bill)">Print</button>
           <button v-if="can('BILL', 'edit')" @click="editBill(bill)">Edit</button>
           <button v-if="bill.status !== 'Paid'" @click="openPayment(bill)">Accept Payment</button>
-          <button v-if="can('BILL', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment Date</button>
+          <button v-if="can('BILL', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment</button>
           <button v-if="can('BILL', 'delete')" class="danger-btn" @click="deleteBill(bill)">Delete</button>
         </td>
       </tr>
@@ -818,7 +819,7 @@ onMounted(load);
               <button @click="printBill(bill)">Print</button>
               <button v-if="can('BILL', 'edit')" @click="editBill(bill)">Edit</button>
               <button v-if="bill.status !== 'Paid'" @click="openPayment(bill)">Accept Payment</button>
-              <button v-if="can('BILL', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment Date</button>
+              <button v-if="can('BILL', 'edit') && bill.payments?.length" @click="openPaymentDates(bill)">Edit Payment</button>
               <button v-if="can('BILL', 'delete')" class="danger-btn" @click="deleteBill(bill)">Delete</button>
             </td>
           </tr>
@@ -981,6 +982,7 @@ onMounted(load);
             max="9"
             step="0.01"
             style="width:80px;display:inline-block"
+            @focus="$event.target.select()"
           >
         </div>
         <div class="grand"><span>Final Amount</span><b>₹{{ finalAmount().toFixed(2) }}</b></div>
@@ -1022,13 +1024,17 @@ onMounted(load);
   <div v-if="paymentDatesModal" class="modal-bg">
     <div class="modal">
       <button class="modal-close-x" @click="paymentDatesModal = null">×</button>
-      <h2>Edit Payment Date &middot; {{ paymentDatesModal.billNumber }}</h2>
-      <div class="muted">Corrects the date on a payment already recorded - doesn't change the amount or add a new payment.</div>
+      <h2>Edit Payment &middot; {{ paymentDatesModal.billNumber }}</h2>
+      <div class="muted">Corrects the date and/or mode on a payment already recorded - doesn't change the amount or add a new payment.</div>
       <table class="table" style="margin-top:12px">
         <tr><th>Amount</th><th>Mode</th><th>Date</th><th></th></tr>
         <tr v-for="p in paymentDatesModal.payments" :key="p.id">
           <td>₹{{ Number(p.amount).toFixed(2) }}</td>
-          <td>{{ p.mode }}</td>
+          <td>
+            <select v-model="p.mode">
+              <option>Cash</option><option>UPI</option><option>Card</option><option>Bank Transfer</option><option>Other</option>
+            </select>
+          </td>
           <td><input v-model="p.paymentDate" type="date" :max="todayDate()"></td>
           <td><button @click="savePaymentDate(p)">Save</button></td>
         </tr>

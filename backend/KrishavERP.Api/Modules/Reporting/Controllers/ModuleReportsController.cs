@@ -53,9 +53,25 @@ public class ModuleReportsController : ControllerBase
             .Where(x => x.PaymentDate >= start && x.PaymentDate < end)
             .SumAsync(x => (decimal?)x.Amount) ?? 0;
 
-        var sales = await _db.PharmacySales
-            .Where(x => x.SaleDateUtc >= start && x.SaleDateUtc < end)
+        // A draft walk-in/OPD bill (not yet paid in full, stock not yet
+        // committed - see PharmacySalesController.Create/BillsController.Pay)
+        // isn't a real sale yet, so it's excluded here the same way it's
+        // excluded from the Stock Report's Sales column.
+        var rawSales = await _db.PharmacySales
+            .Where(x => x.SaleDateUtc >= start && x.SaleDateUtc < end && x.StockDeducted)
             .SumAsync(x => (decimal?)x.TotalAmount) ?? 0;
+
+        // Medicine a patient brought back (PharmacyReturnsController) - netted
+        // off on the date the return actually happened, same convention as
+        // GstFilingPharmacy, not retroactively against the original sale's date.
+        var customerReturns = await (
+            from item in _db.PharmacyReturnItems
+            join ret in _db.PharmacyReturns on item.PharmacyReturnId equals ret.Id
+            where ret.ReturnDateUtc >= start && ret.ReturnDateUtc < end
+            select item.TotalAmount
+        ).SumAsync();
+
+        var sales = rawSales - customerReturns;
 
         var returnAmount = await _db.PharmacyExpiryActions
             .Where(x => x.ActionDateUtc >= start && x.ActionDateUtc < end && x.ActionType == "Return")
@@ -71,15 +87,22 @@ public class ModuleReportsController : ControllerBase
             .Where(x => !x.IsDeleted && x.InvoiceDate >= yearStart && x.InvoiceDate < yearEnd)
             .ToListAsync();
         var yearlySales = await _db.PharmacySales
-            .Where(x => x.SaleDateUtc >= yearStart && x.SaleDateUtc < yearEnd)
+            .Where(x => x.SaleDateUtc >= yearStart && x.SaleDateUtc < yearEnd && x.StockDeducted)
             .ToListAsync();
+        var yearlyReturns = await (
+            from item in _db.PharmacyReturnItems
+            join ret in _db.PharmacyReturns on item.PharmacyReturnId equals ret.Id
+            where ret.ReturnDateUtc >= yearStart && ret.ReturnDateUtc < yearEnd
+            select new { ret.ReturnDateUtc, item.TotalAmount }
+        ).ToListAsync();
 
         var monthly = new List<object>();
         decimal previousRevenue = 0;
         for (var month = 1; month <= 12; month++)
         {
             var purchase = yearlyInvoices.Where(x => x.InvoiceDate.Month == month).Sum(x => x.TotalAmount);
-            var revenue = yearlySales.Where(x => x.SaleDateUtc.Month == month).Sum(x => x.TotalAmount);
+            var monthReturns = yearlyReturns.Where(x => x.ReturnDateUtc.Month == month).Sum(x => x.TotalAmount);
+            var revenue = yearlySales.Where(x => x.SaleDateUtc.Month == month).Sum(x => x.TotalAmount) - monthReturns;
             monthly.Add(new
             {
                 Month = month,
@@ -98,6 +121,7 @@ public class ModuleReportsController : ControllerBase
             CreditPurchaseAmount = creditPurchase,
             SupplierPayments = payments,
             SalesAmount = sales,
+            CustomerReturnAmount = customerReturns,
             ExpiryReturnAmount = returnAmount,
             ExpiryDiscardLoss = discardLoss,
             GrossMarginBeforeOtherCosts = sales - purchaseAmount + returnAmount - discardLoss,
@@ -199,9 +223,22 @@ public class ModuleReportsController : ControllerBase
         var end = (to ?? start).Date.AddDays(1);
         var selectedYear = year ?? DateTime.Today.Year;
 
-        var daily = await _db.DailyExpenses
+        var dailyRows = await _db.DailyExpenses
             .Where(x => x.ExpenseDate >= start && x.ExpenseDate < end)
-            .SumAsync(x => (decimal?)x.Amount) ?? 0;
+            .ToListAsync();
+        var daily = dailyRows.Sum(x => x.Amount);
+
+        // "Hospital Expenses" date-wise - unlike the other expense buckets
+        // below (Pharmacy/Lab/Salary/Doctor, which only ever show as a lump
+        // sum here), DailyExpense is the hospital's own generic day-to-day
+        // cash spending, so this is the one bucket the report breaks out
+        // per-date with its own running total, same shape as
+        // PharmacyHospitalController.GetOutstanding.
+        var hospitalExpenseRows = dailyRows
+            .GroupBy(x => x.ExpenseDate.Date)
+            .Select(g => new { Date = g.Key, Total = g.Sum(x => x.Amount) })
+            .OrderBy(x => x.Date)
+            .ToList();
         var pharmacy = await _db.PharmacyPurchasePayments
             .Where(x => x.PaymentDate >= start && x.PaymentDate < end)
             .SumAsync(x => (decimal?)x.Amount) ?? 0;
@@ -239,6 +276,8 @@ public class ModuleReportsController : ControllerBase
         return Ok(new
         {
             DailyExpenses = daily,
+            HospitalExpenseRows = hospitalExpenseRows,
+            HospitalExpenseTotal = daily,
             SalaryPayments = salaries,
             PharmacyPayments = pharmacy,
             LabPayments = lab,

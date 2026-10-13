@@ -127,6 +127,15 @@ public class PharmacySale
     // Set when this sale is medicine dispensed against an ongoing IPD stay
     // rather than a walk-in/OPD counter sale - see PharmacySalesController.Create.
     public int? IpdAdmissionId { get; set; }
+
+    // IPD dispensing commits stock immediately (the medicine physically
+    // leaves the shelf right away, billing is just deferred to discharge),
+    // so this is true from creation for those. A walk-in/OPD sale instead
+    // starts as a draft bill - RemainingTablets isn't touched until the
+    // bill is actually paid in full (see BillsController.Pay), at which
+    // point this flips true and the sale can no longer be edited
+    // (PharmacySalesController.Edit refuses once this is set).
+    public bool StockDeducted { get; set; } = true;
     public List<PharmacySaleItem> Items { get; set; } = new();
 }
 

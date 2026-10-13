@@ -105,7 +105,7 @@ async function saveOrder() {
         <div class="grand"><span>After Discount</span><b>₹{{ afterTotal().toFixed(2) }}</b></div>
         <div>
           <span>Round Off (-9 to 9)</span>
-          <input v-model.number="order.roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block">
+          <input v-model.number="order.roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block" @focus="$event.target.select()">
         </div>
         <div class="grand"><span>Final Amount</span><b>₹{{ finalTotal().toFixed(2) }}</b></div>
       </div>

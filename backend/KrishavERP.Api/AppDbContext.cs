@@ -68,6 +68,7 @@ public class AppDbContext : DbContext
     public DbSet<StaffAttendance> StaffAttendances => Set<StaffAttendance>();
     public DbSet<SalaryPayment> SalaryPayments => Set<SalaryPayment>();
     public DbSet<DailyExpense> DailyExpenses => Set<DailyExpense>();
+    public DbSet<ExpenseSettlement> ExpenseSettlements => Set<ExpenseSettlement>();
     public DbSet<DoctorSettlement> DoctorSettlements => Set<DoctorSettlement>();
     public DbSet<PharmacyPurchasePayment> PharmacyPurchasePayments => Set<PharmacyPurchasePayment>();
     public DbSet<LabPurchaseExpense> LabPurchaseExpenses => Set<LabPurchaseExpense>();
@@ -107,7 +108,10 @@ public class AppDbContext : DbContext
         b.Entity<SalaryPayment>().Property(x => x.DeductionAmount).HasPrecision(18,2);
         b.Entity<SalaryPayment>().Property(x => x.PayableAmount).HasPrecision(18,2);
         b.Entity<SalaryPayment>().Property(x => x.PaidAmount).HasPrecision(18,2);
+        b.Entity<SalaryPayment>().Property(x => x.ReimbursementAmount).HasPrecision(18,2);
         b.Entity<DailyExpense>().Property(x => x.Amount).HasPrecision(18,2);
+        b.Entity<ExpenseSettlement>().Property(x => x.TotalAmount).HasPrecision(18,2);
+        b.Entity<ExpenseSettlement>().Property(x => x.ReimbursedAmount).HasPrecision(18,2);
         b.Entity<DoctorSettlement>().HasIndex(x => new { x.SourceType, x.SourceId }).IsUnique();
         b.Entity<DoctorSettlement>().HasIndex(x => new { x.DoctorId, x.EarnedDate });
         b.Entity<DoctorSettlement>().Property(x => x.PayableAmount).HasPrecision(18,2);

@@ -1,4 +1,5 @@
 using KrishavERP.Api;
+using KrishavERP.Api.Modules.Expenses;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -288,18 +289,41 @@ public class StaffController : ControllerBase
             .Where(x => x.SalaryYear == prevYear && x.SalaryMonth == prevMonth)
             .ToListAsync();
 
+        // Out-of-pocket hospital expenses (DailyExpense.PaidByStaffId) that
+        // have been settled one-by-one by an Administrator (the only role
+        // allowed to settle - see ExpensesController.SettleOneDaily, which
+        // also refuses to settle an expense the Administrator added
+        // themselves) are owed back to whichever staff member paid, folded
+        // into that month's payable as a separate Reimbursement line.
+        // Fetched once across both this month and last month's window (same
+        // batching as attendance above) rather than per-staff queries.
+        var reimbursementWindowStart = prevMonthStart;
+        var reimbursableExpenses = await (
+            from e in _db.DailyExpenses
+            where e.IsSettled && e.PaidByStaffId.HasValue &&
+                  e.ExpenseDate >= reimbursementWindowStart && e.ExpenseDate < end
+            select new { e.PaidByStaffId, e.ExpenseDate, e.Amount }
+        ).ToListAsync();
+
+        decimal ReimbursementFor(int staffId, DateTime rangeStart, DateTime rangeEnd) => reimbursableExpenses
+            .Where(x => x.PaidByStaffId == staffId && x.ExpenseDate >= rangeStart && x.ExpenseDate < rangeEnd)
+            .Sum(x => x.Amount);
+
         var result = staff.Select(x =>
         {
             var items = attendance.Where(a => a.StaffId == x.Id).ToList();
             var calc = CalculateSalary(items, x.MonthlySalary, daysInMonth);
+            var reimbursement = ReimbursementFor(x.Id, start, end);
+            var payableAmount = calc.PayableAmount + reimbursement;
             var payment = payments.FirstOrDefault(p => p.StaffId == x.Id);
 
             var prevItems = prevAttendance.Where(a => a.StaffId == x.Id).ToList();
             var prevCalc = CalculateSalary(prevItems, x.MonthlySalary, prevDaysInMonth);
+            var prevReimbursement = ReimbursementFor(x.Id, prevMonthStart, prevEnd);
             var prevPayment = prevPayments.FirstOrDefault(p => p.StaffId == x.Id);
             var previousOutstanding = x.DateOfJoining.HasValue && x.DateOfJoining.Value >= prevEnd
                 ? 0
-                : Math.Max(0, prevCalc.PayableAmount - (prevPayment?.PaidAmount ?? 0));
+                : Math.Max(0, prevCalc.PayableAmount + prevReimbursement - (prevPayment?.PaidAmount ?? 0));
 
             return new
             {
@@ -318,13 +342,14 @@ public class StaffController : ControllerBase
                 UnmarkedDays = calc.UnmarkedDays,
                 DailyRate = calc.DailyRate,
                 DeductionAmount = calc.DeductionAmount,
-                PayableAmount = calc.PayableAmount,
+                ReimbursementAmount = reimbursement,
+                PayableAmount = payableAmount,
                 PaidAmount = payment?.PaidAmount ?? 0,
-                Outstanding = Math.Max(0, calc.PayableAmount - (payment?.PaidAmount ?? 0)),
+                Outstanding = Math.Max(0, payableAmount - (payment?.PaidAmount ?? 0)),
                 PreviousOutstanding = previousOutstanding,
                 // What should actually be paid out this month: this
                 // month's salary plus whatever never got paid last month.
-                TotalPayable = calc.PayableAmount + previousOutstanding,
+                TotalPayable = payableAmount + previousOutstanding,
                 payment?.PaymentDate,
                 payment?.PaymentMode,
                 payment?.ReferenceNumber,
@@ -365,7 +390,15 @@ public class StaffController : ControllerBase
 
         var calc = CalculateSalary(items, staff.MonthlySalary, daysInMonth);
 
-        if (request.PaidAmount < 0 || request.PaidAmount > calc.PayableAmount)
+        var reimbursement = await (
+            from e in _db.DailyExpenses
+            where e.IsSettled && e.PaidByStaffId == staff.Id &&
+                  e.ExpenseDate >= start && e.ExpenseDate < end
+            select e.Amount
+        ).SumAsync();
+        var payableAmount = calc.PayableAmount + reimbursement;
+
+        if (request.PaidAmount < 0 || request.PaidAmount > payableAmount)
         {
             return BadRequest(new { message = "Paid amount cannot be more than payable salary." });
         }
@@ -390,7 +423,8 @@ public class StaffController : ControllerBase
         row.AbsentDays = calc.AbsentDays + calc.UnmarkedDays;
         row.HalfDays = calc.HalfDays;
         row.DeductionAmount = calc.DeductionAmount;
-        row.PayableAmount = calc.PayableAmount;
+        row.ReimbursementAmount = reimbursement;
+        row.PayableAmount = payableAmount;
         row.PaidAmount = request.PaidAmount;
         row.PaymentDate = request.PaymentDate;
         row.PaymentMode = request.PaymentMode?.Trim();

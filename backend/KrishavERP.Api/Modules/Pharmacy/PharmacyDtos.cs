@@ -78,6 +78,14 @@ public class PharmacySaleLineRequest
     public int? DiscountTypeId { get; set; }
 }
 
+// Only the medicine lines (and round-off) can be changed on a draft sale -
+// patient/doctor identity isn't editable here (see PharmacySalesController.Edit).
+public class PharmacySaleEditRequest
+{
+    public decimal RoundOff { get; set; }
+    public List<PharmacySaleLineRequest> Items { get; set; } = new();
+}
+
 public class PharmacyReturnRequest
 {
     public int PharmacySaleId { get; set; }

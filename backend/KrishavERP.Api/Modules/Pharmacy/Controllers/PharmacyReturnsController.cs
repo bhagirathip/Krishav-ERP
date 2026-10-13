@@ -88,6 +88,8 @@ public class PharmacyReturnsController : ControllerBase
 
         var sale = await _db.PharmacySales.Include(x => x.Items).FirstOrDefaultAsync(x => x.Id == request.PharmacySaleId);
         if (sale == null) return BadRequest(new { message = "Sale not found." });
+        if (!sale.StockDeducted)
+            return BadRequest(new { message = "This purchase hasn't been completed yet - nothing has been dispensed to return." });
 
         var bill = await _db.Bills.FirstOrDefaultAsync(x => x.Id == sale.BillId);
         if (bill == null || bill.Status == "Deleted") return BadRequest(new { message = "Bill for this sale was not found." });

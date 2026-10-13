@@ -57,6 +57,23 @@ onMounted(load);
   </div>
 
   <div class="card" style="margin-top:18px">
+    <h2>Hospital Expenses · Date-wise</h2>
+    <div class="muted">Showing {{ from }} to {{ to }}</div>
+    <div v-if="!data.hospitalExpenseRows?.length" class="muted">No hospital expenses in this date range.</div>
+    <table v-else class="table">
+      <tr><th>Date</th><th>Total</th></tr>
+      <tr v-for="row in data.hospitalExpenseRows" :key="row.date">
+        <td>{{ String(row.date).slice(0, 10) }}</td>
+        <td><b>₹{{ money(row.total) }}</b></td>
+      </tr>
+      <tr>
+        <td><b>Total</b></td>
+        <td><b>₹{{ money(data.hospitalExpenseTotal) }}</b></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:18px">
     <h2>Month-wise Expense</h2>
     <table class="table">
       <tr>

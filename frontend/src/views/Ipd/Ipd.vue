@@ -420,7 +420,7 @@ onMounted(load);
         <div class="bill-total-box">
           <div><span>Before Discount</span><b>₹{{billBeforeDiscount().toFixed(2)}}</b></div>
           <div class="grand"><span>After Discount</span><b>₹{{billAfterDiscount().toFixed(2)}}</b></div>
-          <div><span>Round Off (-9 to 9)</span><input v-model.number="bill.roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block"></div>
+          <div><span>Round Off (-9 to 9)</span><input v-model.number="bill.roundOff" type="number" min="-9" max="9" step="0.01" style="width:80px;display:inline-block" @focus="$event.target.select()"></div>
           <div class="grand"><span>Final Amount</span><b>₹{{billFinalAmount().toFixed(2)}}</b></div>
         </div>
         <div class="toolbar">

@@ -19,7 +19,6 @@ const doctorMode = ref('none');
 const outsideDoctorName = ref('');
 const walkInPatientName = ref('');
 const walkInPhone = ref('');
-const paymentMode = ref('Cash');
 const roundOff = ref(0);
 const sales = ref([]);
 const dayEndDate = ref(new Date().toISOString().slice(0, 10));
@@ -186,7 +185,11 @@ async function createSale() {
       outsideDoctorName: doctorMode.value === 'outside' ? outsideDoctorName.value.trim() : null,
       walkInPatientName: patientId.value ? null : walkInPatientName.value,
       walkInPhone: patientId.value ? null : walkInPhone.value,
-      paymentMode: paymentMode.value,
+      // Payment is always collected separately via Accept Payment on the
+      // Pharmacy Bills screen now (even for a walk-in paying immediately) -
+      // the backend still stores a mode on the sale record for reference,
+      // but nothing here drives an actual Payment row anymore.
+      paymentMode: 'Cash',
       roundOff: roundOffValue,
       items: cart.value.map(x => ({
         purchaseItemId: x.purchaseItemId,
@@ -196,7 +199,7 @@ async function createSale() {
       }))
     });
 
-    alert(`Sale created successfully. Bill ${data.billNumber}`);
+    alert(`Bill ${data.billNumber} created. Accept payment for it from Pharmacy > Bill to complete the purchase and deduct stock.`);
     cart.value = [];
     patientId.value = null;
     doctorId.value = null;
@@ -390,7 +393,6 @@ onMounted(async () => {
     v-model:outside-doctor-name="outsideDoctorName"
     v-model:walk-in-patient-name="walkInPatientName"
     v-model:walk-in-phone="walkInPhone"
-    v-model:payment-mode="paymentMode"
     v-model:round-off="roundOff"
     v-model:bill-search="billSearch"
     v-model:bill-search-page="billSearchPage"

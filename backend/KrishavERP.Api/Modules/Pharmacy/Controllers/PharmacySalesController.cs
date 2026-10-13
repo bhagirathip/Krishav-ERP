@@ -152,23 +152,30 @@ public class PharmacySalesController : ControllerBase
             .Where(x => x.SaleDateUtc >= start && x.SaleDateUtc < end)
             .Include(x => x.Items)
             .OrderByDescending(x => x.Id)
-            .Select(x => new
-            {
-                x.Id,
-                x.SaleNumber,
-                x.PatientId,
-                x.DoctorId,
-                x.WalkInPatientName,
-                x.WalkInPhone,
-                x.BillId,
-                x.PaymentMode,
-                x.TotalAmount,
-                x.SaleDateUtc,
-                ItemCount = x.Items.Sum(i => i.Quantity)
-            })
             .ToListAsync();
 
-        return Ok(sales);
+        var patientIds = sales.Where(x => x.PatientId.HasValue).Select(x => x.PatientId!.Value).Distinct().ToList();
+        var patients = await _db.Patients.Where(x => patientIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name);
+
+        return Ok(sales.Select(x => new
+        {
+            x.Id,
+            x.SaleNumber,
+            x.PatientId,
+            // The registered patient's name when one was picked, otherwise
+            // the name typed in at the counter for a walk-in sale - either
+            // way this is "who the medicine was sold to", not blank.
+            PatientName = x.PatientId.HasValue && patients.TryGetValue(x.PatientId.Value, out var n) ? n : (x.WalkInPatientName ?? "Walk-in"),
+            x.DoctorId,
+            x.WalkInPatientName,
+            x.WalkInPhone,
+            x.BillId,
+            x.PaymentMode,
+            x.TotalAmount,
+            x.SaleDateUtc,
+            x.StockDeducted,
+            ItemCount = x.Items.Sum(i => i.Quantity)
+        }));
     }
 
     [HttpPost]
@@ -271,21 +278,150 @@ public class PharmacySalesController : ControllerBase
         var bill = new Bill
         {
             PatientId = request.PatientId,
+            WalkInPatientName = sale.WalkInPatientName,
             DoctorId = resolvedDoctorId,
             ReferrerId = linkedPatient?.ReferrerId,
             BillType = "Pharmacy",
-            Status = request.IpdAdmissionId.HasValue ? "Unpaid" : "Paid",
             CreatedAtUtc = DateTime.Now
         };
 
+        // IPD dispensing commits stock immediately (the medicine's already
+        // physically handed over at the ward, billing is just deferred to
+        // discharge). A walk-in/OPD counter sale instead starts as a draft
+        // bill - nothing is deducted from the shelf, and no payment is
+        // collected, until the bill is actually paid in full via Accept
+        // Payment on the Pharmacy Bills screen (see BillsController.Pay) -
+        // same create-then-pay flow every other bill type in this app uses.
+        var deductStockNow = request.IpdAdmissionId.HasValue;
+        var (saleItems, billItems, grandTotal, error) = await BuildSaleLinesAsync(request.Items, deductStockNow);
+        if (error != null) return BadRequest(new { message = error });
+
+        foreach (var item in saleItems) sale.Items.Add(item);
+        foreach (var item in billItems) bill.Items.Add(item);
+
+        grandTotal = Math.Round(grandTotal, 2) + request.RoundOff;
+        bill.GrossAmount = bill.Items.Sum(x => x.UnitPrice * x.Quantity);
+        bill.DiscountAmount = 0;
+        bill.DiscountPercent = 0;
+        bill.RoundOff = request.RoundOff;
+        bill.NetAmount = grandTotal;
+        bill.PaidAmount = 0;
+        bill.Status = "Unpaid";
+        sale.StockDeducted = deductStockNow;
+
+        _db.Bills.Add(bill);
+        await _db.SaveChangesAsync();
+
+        bill.BillNumber = $"BILL-{DateTime.Now:yyyyMMdd}-{bill.Id:000000}";
+
+        sale.BillId = bill.Id;
+        sale.TotalAmount = grandTotal;
+        _db.PharmacySales.Add(sale);
+        await _db.SaveChangesAsync();
+
+        sale.SaleNumber = $"PH-{DateTime.Now:yyyyMMdd}-{sale.Id:000000}";
+        await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return Ok(new
+        {
+            SaleId = sale.Id,
+            sale.SaleNumber,
+            BillId = bill.Id,
+            bill.BillNumber,
+            sale.TotalAmount
+        });
+    }
+
+    // Only the medicine lines can change, and only while nothing's been
+    // committed to the shelf yet (StockDeducted false) - once the bill's
+    // paid in full and stock is deducted, the sale is locked (see
+    // BillsController.Pay). Replaces every line wholesale rather than
+    // diffing individual rows, same approach BillsController.Edit uses for
+    // a generic bill's items.
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Edit(int id, PharmacySaleEditRequest request)
+    {
+        var sale = await _db.PharmacySales.Include(x => x.Items).FirstOrDefaultAsync(x => x.Id == id);
+        if (sale == null) return NotFound();
+        if (sale.StockDeducted)
+            return BadRequest(new { message = "This purchase has already been completed and can no longer be edited." });
+        if (request.Items.Count == 0)
+            return BadRequest(new { message = "Add at least one medicine to the sale." });
+        if (request.RoundOff < -9 || request.RoundOff > 9)
+            return BadRequest(new { message = "Round off must be between -9 and 9." });
+        request.RoundOff = Math.Round(request.RoundOff, 2);
+
+        var bill = await _db.Bills.Include(x => x.Items).FirstOrDefaultAsync(x => x.Id == sale.BillId);
+        if (bill == null) return NotFound();
+
+        var (saleItems, billItems, grandTotal, error) = await BuildSaleLinesAsync(request.Items, deductStock: false);
+        if (error != null) return BadRequest(new { message = error });
+
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+
+        _db.PharmacySaleItems.RemoveRange(sale.Items);
+        _db.BillItems.RemoveRange(bill.Items);
+        sale.Items.Clear();
+        bill.Items.Clear();
+        foreach (var item in saleItems) sale.Items.Add(item);
+        foreach (var item in billItems) bill.Items.Add(item);
+
+        grandTotal = Math.Round(grandTotal, 2) + request.RoundOff;
+        sale.TotalAmount = grandTotal;
+        bill.GrossAmount = bill.Items.Sum(x => x.UnitPrice * x.Quantity);
+        bill.RoundOff = request.RoundOff;
+        bill.NetAmount = grandTotal;
+
+        // Same refund-on-reduction precedent as BillsController.Edit - a
+        // partial payment taken before this edit can now exceed the new,
+        // smaller total, so the excess is immediately recorded as a refund
+        // rather than left as a phantom credit.
+        decimal refundAmount = 0;
+        if (grandTotal < bill.PaidAmount)
+        {
+            refundAmount = bill.PaidAmount - grandTotal;
+            var lastMode = await _db.Payments
+                .Where(p => p.BillId == bill.Id)
+                .OrderByDescending(p => p.PaidAtUtc)
+                .Select(p => p.Mode)
+                .FirstOrDefaultAsync() ?? "Cash";
+            _db.Payments.Add(new Payment
+            {
+                BillId = bill.Id,
+                Amount = -refundAmount,
+                Mode = lastMode,
+                Reference = "Refund - pharmacy bill amount reduced on edit",
+                PaidAtUtc = DateTime.Now
+            });
+            bill.PaidAmount -= refundAmount;
+        }
+
+        bill.Status = bill.PaidAmount >= bill.NetAmount ? "Paid" : bill.PaidAmount > 0 ? "Partially Paid" : "Unpaid";
+
+        await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return Ok(new { sale, bill, refundAmount });
+    }
+
+    // Shared by Create and Edit - validates and prices each requested line
+    // against current stock, optionally committing the deduction right away
+    // (deductStock=true for IPD dispensing) or leaving RemainingTablets
+    // untouched for a draft walk-in/OPD sale. Returns the first validation
+    // error message instead of throwing, so callers can translate it into a
+    // plain BadRequest the same way the old inline version did.
+    private async Task<(List<PharmacySaleItem> SaleItems, List<BillItem> BillItems, decimal GrandTotal, string? Error)> BuildSaleLinesAsync(
+        List<PharmacySaleLineRequest> items, bool deductStock)
+    {
+        var saleItems = new List<PharmacySaleItem>();
+        var billItems = new List<BillItem>();
         decimal grandTotal = 0;
 
-        foreach (var line in request.Items)
+        foreach (var line in items)
         {
             if (line.Quantity <= 0)
-            {
-                return BadRequest(new { message = "Sale quantity must be greater than zero." });
-            }
+                return (saleItems, billItems, grandTotal, "Sale quantity must be greater than zero.");
 
             var stock = await _db.PharmacyPurchaseItems
                 .Include(x => x.MedicineType)
@@ -293,14 +429,10 @@ public class PharmacySalesController : ControllerBase
                 .FirstOrDefaultAsync(x => x.Id == line.PurchaseItemId);
 
             if (stock == null || stock.PurchaseInvoice == null || stock.PurchaseInvoice.IsDeleted)
-            {
-                return BadRequest(new { message = "One of the selected medicines is no longer available." });
-            }
+                return (saleItems, billItems, grandTotal, "One of the selected medicines is no longer available.");
 
             if (stock.ExpiryDate.Date < DateTime.Today)
-            {
-                return BadRequest(new { message = $"{stock.ProductName} / batch {stock.BatchNo} is expired." });
-            }
+                return (saleItems, billItems, grandTotal, $"{stock.ProductName} / batch {stock.BatchNo} is expired.");
 
             var typeName = stock.MedicineType?.Name ?? "Tablet";
             var unitsPerPack = Math.Max(stock.TabletsPerStrip, 1);
@@ -330,21 +462,14 @@ public class PharmacySalesController : ControllerBase
                 : new[] { packLabel, unitLabel };
 
             if (!validUnits.Contains(line.UnitType))
-            {
-                return BadRequest(new { message = $"Invalid sale unit for {stock.ProductName}." });
-            }
+                return (saleItems, billItems, grandTotal, $"Invalid sale unit for {stock.ProductName}.");
 
             var requiredUnits = line.UnitType == packLabel
                 ? line.Quantity * unitsPerPack
                 : line.Quantity;
 
             if (requiredUnits > stock.RemainingTablets)
-            {
-                return BadRequest(new
-                {
-                    message = $"Only {stock.RemainingTablets} unit(s) of {stock.ProductName} / batch {stock.BatchNo} are available."
-                });
-            }
+                return (saleItems, billItems, grandTotal, $"Only {stock.RemainingTablets} unit(s) of {stock.ProductName} / batch {stock.BatchNo} are available.");
 
             var unitPrice = line.UnitType == packLabel
                 ? stock.Mrp
@@ -358,15 +483,15 @@ public class PharmacySalesController : ControllerBase
             }
             catch (InvalidOperationException ex)
             {
-                return BadRequest(new { message = ex.Message });
+                return (saleItems, billItems, grandTotal, ex.Message);
             }
             var discountAmount = discount.Amount;
             var lineTotal = Math.Round(discount.Net, 2);
 
             grandTotal += lineTotal;
-            stock.RemainingTablets -= requiredUnits;
+            if (deductStock) stock.RemainingTablets -= requiredUnits;
 
-            sale.Items.Add(new PharmacySaleItem
+            saleItems.Add(new PharmacySaleItem
             {
                 PurchaseItemId = stock.Id,
                 Manufacturer = stock.Manufacturer,
@@ -387,7 +512,7 @@ public class PharmacySalesController : ControllerBase
                 TotalAmount = lineTotal
             });
 
-            bill.Items.Add(new BillItem
+            billItems.Add(new BillItem
             {
                 Description = $"{stock.ProductName} - {stock.BatchNo} ({line.UnitType})",
                 Quantity = line.Quantity,
@@ -403,50 +528,7 @@ public class PharmacySalesController : ControllerBase
             });
         }
 
-        grandTotal = Math.Round(grandTotal, 2) + request.RoundOff;
-        bill.GrossAmount = bill.Items.Sum(x => x.UnitPrice * x.Quantity);
-        bill.DiscountAmount = 0;
-        bill.DiscountPercent = 0;
-        bill.RoundOff = request.RoundOff;
-        bill.NetAmount = grandTotal;
-        bill.PaidAmount = request.IpdAdmissionId.HasValue ? 0 : grandTotal;
-
-        _db.Bills.Add(bill);
-        await _db.SaveChangesAsync();
-
-        bill.BillNumber = $"BILL-{DateTime.Now:yyyyMMdd}-{bill.Id:000000}";
-
-        // Walk-in/OPD pharmacy sales are cash-and-carry, paid in full at the
-        // counter. IPD dispensing is on credit against the patient's stay -
-        // no payment is collected now, so no Payment row is recorded.
-        if (!request.IpdAdmissionId.HasValue)
-        {
-            _db.Payments.Add(new Payment
-            {
-                BillId = bill.Id,
-                Amount = grandTotal,
-                Mode = request.PaymentMode,
-                PaidAtUtc = DateTime.Now
-            });
-        }
-
-        sale.BillId = bill.Id;
-        sale.TotalAmount = grandTotal;
-        _db.PharmacySales.Add(sale);
-        await _db.SaveChangesAsync();
-
-        sale.SaleNumber = $"PH-{DateTime.Now:yyyyMMdd}-{sale.Id:000000}";
-        await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
-
-        return Ok(new
-        {
-            SaleId = sale.Id,
-            sale.SaleNumber,
-            BillId = bill.Id,
-            bill.BillNumber,
-            sale.TotalAmount
-        });
+        return (saleItems, billItems, grandTotal, null);
     }
 
     [HttpGet("{id:int}/print")]
@@ -525,20 +607,46 @@ public class PharmacySalesController : ControllerBase
             .Include(x => x.Items)
             .ToListAsync();
 
+        // Medicine returned on this same calendar day - this is a daily
+        // closing/reconciliation report, so it nets off same-day returns
+        // (a credit note issued today affects today's close), same
+        // convention as GstFilingPharmacy/ModuleReportsController.Pharmacy.
+        var returnItems = await (
+            from item in _db.PharmacyReturnItems
+            join ret in _db.PharmacyReturns on item.PharmacyReturnId equals ret.Id
+            where ret.ReturnDateUtc >= start && ret.ReturnDateUtc < end
+            select item
+        ).ToListAsync();
+        var returnedByBatch = returnItems
+            .GroupBy(x => new { x.ProductName, x.BatchNo })
+            .ToDictionary(g => (g.Key.ProductName, g.Key.BatchNo), g => new
+            {
+                Quantity = g.Sum(x => x.Quantity),
+                Units = g.Sum(x => x.QuantityInTablets),
+                Amount = g.Sum(x => x.TotalAmount)
+            });
+
         var soldProducts = sales
             .SelectMany(x => x.Items)
             .GroupBy(x => new { x.ProductName, x.BatchNo, x.Packing })
-            .Select(g => new
+            .Select(g =>
             {
-                g.Key.ProductName,
-                g.Key.BatchNo,
-                g.Key.Packing,
-                QuantitySold = g.Sum(x => x.Quantity),
-                UnitsSold = g.Sum(x => x.QuantityInTablets),
-                Amount = g.Sum(x => x.TotalAmount)
+                var returned = returnedByBatch.TryGetValue((g.Key.ProductName, g.Key.BatchNo), out var r) ? r : null;
+                return new
+                {
+                    g.Key.ProductName,
+                    g.Key.BatchNo,
+                    g.Key.Packing,
+                    QuantitySold = g.Sum(x => x.Quantity) - (returned?.Quantity ?? 0),
+                    UnitsSold = g.Sum(x => x.QuantityInTablets) - (returned?.Units ?? 0),
+                    Amount = g.Sum(x => x.TotalAmount) - (returned?.Amount ?? 0)
+                };
             })
             .OrderByDescending(x => x.UnitsSold)
             .ToList();
+
+        var totalReturnedUnits = returnItems.Sum(x => x.QuantityInTablets);
+        var totalReturnedAmount = returnItems.Sum(x => x.TotalAmount);
 
         var stock = await _db.PharmacyPurchaseItems
             .Include(x => x.MedicineType)
@@ -578,8 +686,9 @@ public class PharmacySalesController : ControllerBase
         {
             Date = start,
             NumberOfBills = sales.Count,
-            TotalUnitsSold = sales.SelectMany(x => x.Items).Sum(x => x.QuantityInTablets),
-            TotalSalesAmount = sales.Sum(x => x.TotalAmount),
+            TotalUnitsSold = sales.SelectMany(x => x.Items).Sum(x => x.QuantityInTablets) - totalReturnedUnits,
+            TotalSalesAmount = sales.Sum(x => x.TotalAmount) - totalReturnedAmount,
+            TotalReturnedAmount = totalReturnedAmount,
             SoldProducts = soldProducts,
             RemainingStock = remaining
         });
@@ -631,23 +740,52 @@ public class PharmacySalesController : ControllerBase
 
         var purchaseItemGroupKey = purchaseItems.ToDictionary(x => x.Id, x => (x.ProductName, x.Mrp));
 
-        var relevantSaleItems = await _db.PharmacySaleItems
+        var allRelevantSaleItems = await _db.PharmacySaleItems
             .Where(x => purchaseItemGroupKey.Keys.Contains(x.PurchaseItemId))
             .ToListAsync();
 
-        var saleIds = relevantSaleItems.Select(x => x.PharmacySaleId).Distinct().ToList();
-        var saleDates = await _db.PharmacySales
+        var saleIds = allRelevantSaleItems.Select(x => x.PharmacySaleId).Distinct().ToList();
+        var saleInfo = await _db.PharmacySales
             .Where(x => saleIds.Contains(x.Id))
-            .ToDictionaryAsync(x => x.Id, x => x.SaleDateUtc);
+            .ToDictionaryAsync(x => x.Id, x => new { x.SaleDateUtc, x.StockDeducted });
+
+        // A draft walk-in/OPD bill (not yet paid in full - see
+        // BillsController.Pay/PharmacySalesController.Create) hasn't
+        // actually taken anything off the shelf yet, so it shouldn't count
+        // as "Sales" here - otherwise Purchases - Sales would stop
+        // reconciling against the live Closing Stock figure below.
+        var relevantSaleItems = allRelevantSaleItems
+            .Where(x => saleInfo.TryGetValue(x.PharmacySaleId, out var info) && info.StockDeducted)
+            .ToList();
+        var saleDates = saleInfo.ToDictionary(x => x.Key, x => x.Value.SaleDateUtc);
+
+        var relevantReturnItems = await _db.PharmacyReturnItems
+            .Where(x => purchaseItemGroupKey.Keys.Contains(x.PurchaseItemId))
+            .ToListAsync();
+        var returnIds = relevantReturnItems.Select(x => x.PharmacyReturnId).Distinct().ToList();
+        var returnDates = await _db.PharmacyReturns
+            .Where(x => returnIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => x.ReturnDateUtc);
 
         var start = from?.Date;
         var end = to?.Date.AddDays(1);
         bool InRange(DateTime d) => !start.HasValue || (d >= start.Value && d < end!.Value);
 
+        // Units actually sold = raw sale units minus whatever came back on a
+        // PharmacyReturn in the same date window (a credit note netted on
+        // the date the return happened, same convention used elsewhere -
+        // see GstFilingPharmacy/DayEnd).
+        var returnedBaseUnitsByGroup = relevantReturnItems
+            .Where(x => returnDates.TryGetValue(x.PharmacyReturnId, out var d) && InRange(d))
+            .GroupBy(x => purchaseItemGroupKey[x.PurchaseItemId])
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityInTablets));
+
         var salesBaseUnitsByGroup = relevantSaleItems
             .Where(x => saleDates.TryGetValue(x.PharmacySaleId, out var d) && InRange(d))
             .GroupBy(x => purchaseItemGroupKey[x.PurchaseItemId])
-            .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityInTablets));
+            .ToDictionary(
+                g => g.Key,
+                g => g.Sum(x => x.QuantityInTablets) - (returnedBaseUnitsByGroup.TryGetValue(g.Key, out var r) ? r : 0));
 
         string PackAndUnitLabel(string? medicineTypeName)
         {
